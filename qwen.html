@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Qwen3 Coder Next via Puter.js</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #1a2a6c, #b21f1f, #1a2a6c);
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      color: #333;
+    }
+    header {
+      background: rgba(0, 0, 0, 0.8);
+      color: #fff;
+      padding: 1rem;
+      text-align: center;
+      font-size: 1.4rem;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      position: relative;
+    }
+    header::after {
+      content: '';
+      position: absolute;
+      bottom: -10px;
+      left: 0;
+      width: 100%;
+      height: 10px;
+      background: linear-gradient(90deg, #ff8a00, #e52e71, #22c1c3);
+      border-radius: 50%;
+    }
+    #chat {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+    .message {
+      margin-bottom: 1rem;
+      padding: 1rem;
+      border-radius: 12px;
+      max-width: 85%;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+      line-height: 1.5;
+      position: relative;
+      animation: fadeIn 0.3s ease-out;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .user {
+      background: linear-gradient(135deg, #3498db, #8e44ad);
+      color: white;
+      margin-left: auto;
+      border-bottom-right-radius: 0;
+    }
+    .ai {
+      background: rgba(255, 255, 255, 0.9);
+      color: #333;
+      margin-right: auto;
+      border-bottom-left-radius: 0;
+    }
+    footer {
+      display: flex;
+      padding: 1rem;
+      background: rgba(255, 255, 255, 0.9);
+      border-top: 1px solid #ddd;
+      box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.1);
+    }
+    textarea {
+      flex: 1;
+      resize: none;
+      padding: 1rem;
+      border-radius: 12px;
+      border: 2px solid #3498db;
+      font-size: 1rem;
+      box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.1);
+      transition: border-color 0.3s;
+    }
+    textarea:focus {
+      outline: none;
+      border-color: #8e44ad;
+    }
+    button {
+      margin-left: 1rem;
+      padding: 1rem 1.5rem;
+      background: linear-gradient(135deg, #3498db, #8e44ad);
+      color: white;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      font-size: 1rem;
+      font-weight: bold;
+      transition: all 0.3s;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    }
+    button:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 6px 12px rgba(0, 0, 0, 0.3);
+    }
+    button:active {
+      transform: translateY(1px);
+    }
+    code {
+      background: rgba(0, 0, 0, 0.1);
+      color: #e74c3c;
+      padding: 0.2rem 0.4rem;
+      border-radius: 4px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.9em;
+    }
+    pre {
+      background: rgba(0, 0, 0, 0.1);
+      color: #2c3e50;
+      padding: 1rem;
+      border-radius: 8px;
+      overflow-x: auto;
+      box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.1);
+      margin: 0.5rem 0;
+      border-left: 4px solid #3498db;
+    }
+    #status {
+      padding: 0.8rem;
+      text-align: center;
+      font-size: 1rem;
+      color: #fff;
+      background: rgba(0, 0, 0, 0.5);
+      border-radius: 8px;
+      margin: 0.5rem;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0% { opacity: 0.7; }
+      50% { opacity: 1; }
+      100% { opacity: 0.7; }
+    }
+    .typing-indicator {
+      display: inline-block;
+      padding: 0.5rem 1rem;
+      background: rgba(255, 255, 255, 0.8);
+      border-radius: 20px;
+      margin: 0.5rem 0;
+      animation: blink 1.4s infinite;
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 0.5; }
+      50% { opacity: 1; }
+    }
+    .typing-indicator span {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #3498db;
+      margin: 0 2px;
+      animation: bounce 1.4s infinite;
+    }
+    .typing-indicator span:nth-child(2) {
+      animation-delay: 0.2s;
+    }
+    .typing-indicator span:nth-child(3) {
+      animation-delay: 0.4s;
+    }
+    @keyframes bounce {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-5px); }
+    }
+    .model-info {
+      text-align: center;
+      padding: 0.5rem;
+      font-size: 0.9rem;
+      color: #fff;
+      background: rgba(0, 0, 0, 0.4);
+      border-radius: 8px;
+      margin: 0.5rem;
+    }
+    .model-info a {
+      color: #3498db;
+      text-decoration: none;
+    }
+    .model-info a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <header>💻 Qwen3 Coder Next (Puter.js)</header>
+  <div class="model-info">
+    Powered by <a href="https://developer.puter.com/ai/qwen/qwen3-coder-next/" target="_blank">Qwen3 Coder Next</a> | 
+    <a href="https://developer.puter.com/blog/qwen3-coder-next-in-puter-js/" target="_blank">Documentation</a>
+  </div>
+  <div id="status">Loading Puter.js...</div>
+  <div id="chat"></div>
+  <div id="typing" class="typing-indicator" style="display: none;">
+    <span></span>
+    <span></span>
+    <span></span>
+  </div>
+  <footer>
+    <label for="prompt">Ask Qwen3 Coder Next:</label>
+    <textarea id="prompt" rows="3" placeholder="Ask Qwen3 Coder Next to write code, fix bugs, review code, or explain concepts..." required></textarea>
+    <button onclick="sendMessage()" aria-label="Send message">Send</button>
+  </footer>
+
+  <script>
+    // Global variable to track if Puter.js is ready
+    let puterReady = false;
+    let puterLoading = true;
+
+    // Initialize Puter.js
+    function initPuter() {
+      return new Promise((resolve, reject) => {
+        // Check if Puter.js is already loaded
+        if (typeof puter !== 'undefined') {
+          puterReady = true;
+          puterLoading = false;
+          document.getElementById('status').textContent = 'Puter.js loaded successfully!';
+          console.log('Puter.js already loaded');
+          resolve(true);
+          return;
+        }
+
+        // Create script element
+        const script = document.createElement('script');
+        script.src = 'https://js.puter.com/v2/';
+        script.onload = () => {
+          puterReady = true;
+          puterLoading = false;
+          document.getElementById('status').textContent = 'Puter.js loaded successfully!';
+          console.log('Puter.js loaded successfully');
+          resolve(true);
+        };
+        script.onerror = () => {
+          puterLoading = false;
+          document.getElementById('status').textContent = 'Failed to load Puter.js from CDN';
+          console.error('Failed to load Puter.js from CDN');
+          reject(new Error('Failed to load Puter.js'));
+        };
+        document.head.appendChild(script);
+      });
+    }
+
+    // Initialize when page loads
+    window.addEventListener('load', async () => {
+      try {
+        await initPuter();
+        setupChat();
+      } catch (error) {
+        console.error('Failed to initialize:', error);
+        document.getElementById('status').textContent = 'Error initializing Puter.js: ' + error.message;
+      }
+    });
+
+    function setupChat() {
+      const chat = document.getElementById("chat");
+      const promptBox = document.getElementById("prompt");
+
+      function addMessage(content, role) {
+        const div = document.createElement("div");
+        div.className = `message ${role}`;
+        div.innerHTML = content;
+        chat.appendChild(div);
+        chat.scrollTop = chat.scrollHeight;
+      }
+
+      function showTyping() {
+        document.getElementById('typing').style.display = 'inline-block';
+        chat.scrollTop = chat.scrollHeight;
+      }
+
+      function hideTyping() {
+        document.getElementById('typing').style.display = 'none';
+      }
+
+      async function sendMessage() {
+        if (puterLoading) {
+          addMessage("Please wait... Puter.js is still loading.", "ai");
+          return;
+        }
+
+        if (!puterReady) {
+          addMessage("Puter.js is not ready. Please refresh the page.", "ai");
+          return;
+        }
+
+        const input = promptBox.value.trim();
+        if (!input) return;
+
+        addMessage(input, "user");
+        promptBox.value = "";
+        showTyping();
+
+        try {
+          // Check if puter is available
+          if (typeof puter === 'undefined') {
+            addMessage("Error: Puter.js is not available. Please refresh the page.", "ai");
+            hideTyping();
+            return;
+          }
+
+          // Show typing indicator during processing
+          showTyping();
+
+          // Call Qwen3 Coder Next model
+          const response = await puter.ai.chat(input, {
+            model: "qwen/qwen3-coder-next"
+          });
+
+          hideTyping();
+
+          // Extract the content from the response
+          const reply = response.message.content;
+          addMessage(formatCode(reply), "ai");
+        } catch (error) {
+          hideTyping();
+          addMessage(`Error: ${error.message}`, "ai");
+          console.error("Error:", error);
+        }
+      }
+
+      function formatCode(text) {
+        // Handle code blocks properly
+        return text.replace(/```([\s\S]*?)```/g, (match, code) => {
+          return `<pre><code class="language-javascript">${escapeHtml(code.trim())}</code></pre>`;
+        });
+      }
+
+      function escapeHtml(str) {
+        return str.replace(/&/g, "&amp;")
+                  .replace(/</g, "&lt;")
+                  .replace(/>/g, "&gt;")
+                  .replace(/"/g, "&quot;")
+                  .replace(/'/g, "&#039;");
+      }
+
+      // Allow sending with Enter key (Shift+Enter for new line)
+      promptBox.addEventListener("keypress", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          sendMessage();
+        }
+      });
+
+      // Add example prompts
+      addMessage("💡 Try asking: <br>• Write a Python function that implements a binary search tree<br>• Fix this JavaScript code that reverses a linked list<br>• Explain the trade-offs between Redis and Memcached<br>• Review this code for potential issues", "ai");
+    }
+  </script>
+</body>
+</html>
