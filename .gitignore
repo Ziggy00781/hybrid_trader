@@ -11,12 +11,9 @@ venv/
 .venv/
 
 # Data
-data/raw/
-data/processed/
-data/cache/
-data/tmp/
-backtests/results/
+data/
 lightning_logs/
+experimental/
 
 # Models / checkpoints
 models/
