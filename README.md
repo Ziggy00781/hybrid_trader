@@ -91,7 +91,7 @@ python -m src.live.runtime
 # or use live_loop.py for continuous operation
 ⚠️ Warning: Live trading involves real financial risk. Start with paper trading and small position sizes.
 
-📊 # How It Works
+### 📊 How It Works
 
 Data → Multi-exchange 5m BTC/USDT candles
 Features → Classical TA + regime detection + foundation model forecasts as extra signals
@@ -102,27 +102,19 @@ PatchTST: Predicts next 5m return directly → converted to trading signal
 Signals → Threshold-based (e.g., strong long if predicted return > 0.05%)
 Execution → Backtester or live loop with position management
 
-🛠️ Configuration & Customization
+### 🛠️ Configuration & Customization
 
 Model paths and thresholds are currently in the respective scripts (future improvement: centralized config/ with YAML).
 Feature sets can be extended in src/features/ta_regime_features.py.
 Backtest parameters (TP/SL, thresholds) are adjustable in the Streamlit sidebar.
 
-📈 Results & Visualization
+### 📈 Results & Visualization
 The repository includes example charts:
 
 price_vs_prediction.png — Actual price vs model predictions
 predictions.png — Raw forecast visualization
 
-Add your own equity curves and trade plots in the figures/ folder (recommended).
-🧪 Experimental Components
-
-src/models/chronos_inference.py, timesfm_inference.py, timegpt_inference.py
-Enhanced PatchTST variants
-
-These are kept for research. The production path currently uses LightGBM + PatchTST.
-
-📋 Roadmap
+### 📋 Roadmap
 
  Centralized configuration (config.yaml)
  Ensemble model (PatchTST + LightGBM)
@@ -133,12 +125,12 @@ These are kept for research. The production path currently uses LightGBM + Patch
  Multi-asset & multi-timeframe support
  Proper unit tests
 
-⚠️ Disclaimer
-This project is for educational and research purposes only.
+### ⚠️ Disclaimer
+* This project is for educational and research purposes only.
 No guarantee of profitability. Past performance does not indicate future results.
 Trading cryptocurrencies involves substantial risk of loss. Use at your own risk.
-Always backtest thoroughly and start with simulated trading.
-🤝 Contributing
+Always backtest thoroughly and start with simulated trading. *
+### 🤝 Contributing
 Contributions are welcome! Feel free to open issues or pull requests for:
 
 Bug fixes
@@ -146,8 +138,8 @@ New features
 Improved documentation
 Better risk management
 
-📄 License
+### 📄 License
 This project is licensed under the MIT License — see the LICENSE file for details (add one if you want).
 
-Made with ❤️ in Hawaii by Ziad (Ziggy00781)
+### Made with ❤️ in Hawaii by Ziad (Ziggy00781)
 Questions or ideas? Open an issue or reach out!
