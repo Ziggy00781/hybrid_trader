@@ -59,7 +59,7 @@ flowchart TD
 Core Idea: Use PatchTST for the live forecasting engine and LightGBM for quick iteration and explainability. Foundation models enrich features or serve as experimental baselines.
 📁 Project Structure
 
-- 📁 C:.
+- 📁 hybrid_trader
   - 📄 .gitignore
   - 📄 bootstrap_gpu.sh
   - 📄 filetree.txt
