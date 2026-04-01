@@ -1,92 +1,92 @@
 import pandas as pd
 import numpy as np
-import ta  # pip install ta
-
-from src.models.timegpt_inference import timegpt_predict
+import ta
+from typing import Tuple
 
 def dummy_regime_classifier(df: pd.DataFrame) -> pd.Series:
-    ema50 = df["close"].ewm(span=50).mean()
-    regime = np.where(df["close"] > ema50, "trending_up", "trending_down")
-    return pd.Series(regime, index=df.index)
+    """
+    Simple but effective market regime classifier.
+    Returns: 'trending_up', 'trending_down', or 'ranging'
+    """
+    if df.empty:
+        return pd.Series("ranging", index=df.index, dtype="object")
+
+    close = df["close"]
+    returns = close.pct_change().fillna(0)
+    
+    # Rolling statistics
+    short_return = returns.rolling(window=20, min_periods=10).mean()
+    volatility = returns.rolling(window=50, min_periods=20).std()
+    vol_baseline = volatility.rolling(window=100, min_periods=50).quantile(0.7)
+
+    regime = pd.Series("ranging", index=df.index, dtype="object")
+
+    # Trending Up: positive drift + relatively low volatility
+    trending_up = (short_return > 0.0003) & (volatility < vol_baseline)
+    regime[trending_up] = "trending_up"
+
+    # Trending Down
+    trending_down = (short_return < -0.0003) & (volatility < vol_baseline)
+    regime[trending_down] = "trending_down"
+
+    return regime
 
 
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
-    feat = pd.DataFrame(index=df.index)
+    """
+    Build consistent features for LightGBM model.
+    Returns exactly 9 numeric features + 'regime' column.
+    """
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    # Core price & volume series
     close = df["close"]
     high = df["high"]
     low = df["low"]
-    volume = df["volume"]
+    volume = df.get("volume", pd.Series(0.0, index=df.index))
 
-    # -------------------------
-    # Trend indicators
-    # -------------------------
-    feat["ema_20"] = close.ewm(span=20).mean()
-    feat["ema_50"] = close.ewm(span=50).mean()
-    feat["ema_200"] = close.ewm(span=200).mean()
+    feat = pd.DataFrame(index=df.index)
 
-    # -------------------------
-    # Momentum indicators
-    # -------------------------
+    # ==================== 1. Trend Features ====================
+    feat["ema_20"] = close.ewm(span=20, min_periods=1).mean()
+    feat["ema_50"] = close.ewm(span=50, min_periods=1).mean()
+    feat["ema_200"] = close.ewm(span=200, min_periods=1).mean()
+
+    # ==================== 2. Momentum Features ====================
     feat["rsi_14"] = ta.momentum.RSIIndicator(close, window=14).rsi()
     feat["roc_10"] = ta.momentum.ROCIndicator(close, window=10).roc()
 
-    # -------------------------
-    # Volatility indicators
-    # -------------------------
-    feat["atr_14"] = ta.volatility.AverageTrueRange(
-        high=high, low=low, close=close, window=14
-    ).average_true_range()
+    # ==================== 3. Volatility Features ====================
+    atr = ta.volatility.AverageTrueRange(high=high, low=low, close=close, window=14)
+    feat["atr_14"] = atr.average_true_range()
 
-    # -------------------------
-    # Volume indicators
-    # -------------------------
-    feat["vol_zscore_50"] = (
-        (volume - volume.rolling(50).mean()) /
-        (volume.rolling(50).std() + 1e-9)
-    )
+    # ==================== 4. Volume Features ====================
+    vol_mean = volume.rolling(window=50, min_periods=20).mean()
+    vol_std = volume.rolling(window=50, min_periods=20).std()
+    feat["vol_zscore_50"] = (volume - vol_mean) / (vol_std + 1e-8)
 
-    # -------------------------
-    # Regime classification
-    # -------------------------
+    # ==================== 5. Regime Features ====================
     feat["regime"] = dummy_regime_classifier(df)
     feat["regime_trending_up"] = (feat["regime"] == "trending_up").astype(int)
-    feat["regime_trending_down"] = (feat["regime"] == "trending_down").astype(int)
 
-    # -------------------------
-    # TimesFM deep forecasting features
-    # -------------------------
-logret = np.log(close / close.shift(1))
-window = 256
-horizon = 12
+    # ==================== Final Cleanup ====================
+    # Fill any remaining NaNs (important for early rows)
+    feat = feat.fillna(method='ffill').fillna(method='bfill').fillna(0)
 
-tgpt_mean = []
-tgpt_std = []
-tgpt_up = []
-tgpt_down = []
+    # Ensure consistent column order (important for model compatibility)
+    feature_columns = [
+        "ema_20", "ema_50", "ema_200",
+        "rsi_14", "roc_10",
+        "atr_14",
+        "vol_zscore_50",
+        "regime_trending_up"
+    ]
 
-for i in range(len(df)):
-    if i < window:
-        tgpt_mean.append(np.nan)
-        tgpt_std.append(np.nan)
-        tgpt_up.append(np.nan)
-        tgpt_down.append(np.nan)
-        continue
+    # Return only the 8 numeric features + regime (total 9 features when regime is dropped)
+    final_feat = feat[feature_columns + ["regime"]].copy()
 
-    seq = logret.iloc[i-window:i].values
-    preds = timegpt_predict(seq, horizon=horizon)
+    print(f"✅ build_features completed: {final_feat.shape[1]} columns "
+          f"({len(feature_columns)} numeric + regime)")
 
-    tgpt_mean.append(preds["tgpt_mean"])
-    tgpt_std.append(preds["tgpt_std"])
-    tgpt_up.append(preds["tgpt_up_prob"])
-    tgpt_down.append(preds["tgpt_down_prob"])
-
-feat["tgpt_mean"] = tgpt_mean
-feat["tgpt_std"] = tgpt_std
-feat["tgpt_up_prob"] = tgpt_up
-feat["tgpt_down_prob"] = tgpt_down
-
-    # -------------------------
-    # Final cleanup
-    # -------------------------
-    feat = feat.dropna()
-    return feat
+    return final_feat
