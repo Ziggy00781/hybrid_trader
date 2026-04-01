@@ -108,25 +108,31 @@ Core Idea: Use PatchTST for the live forecasting engine and LightGBM for quick i
 Bashgit clone https://github.com/Ziggy00781/hybrid_trader.git
 cd hybrid_trader
 2. Install dependencies
-```Bash pip install -r requirements.txt ```
+```bash pip install -r requirements.txt ```
 3. (Optional) GPU Environment Setup
-Bashbash bootstrap_gpu.sh
+```bash bootstrap_gpu.sh ```
 4. Prepare Data
-Bashbash prepare_data.sh
+```bash prepare_data.sh ```
 This script handles fetching, merging, resampling, and feature engineering.
 5. Train Models (if needed)
-Bash# Train PatchTST
+```bash
+# Train PatchTST
 bash launch_patchtst.sh
+```
 
 # Or run specific training scripts
-python -m src.train.train_patchtst
+```bash python -m src.train.train_patchtst
 python -m src.train.train_model      # for LightGBM
+```
 6. Run the Dashboard
-Bashstreamlit run src/app_dashboard.py
+```bash python streamlit run src/app_dashboard.py
+```
 7. Run Live Trading (Paper or Real)
-Bash# Review and set your Bybit API keys in src/live/api.py or config
+```bash
+# Review and set your Bybit API keys in src/live/api.py or config
 python -m src.live.runtime
 # or use live_loop.py for continuous operation
+```
 ⚠️ Warning: Live trading involves real financial risk. Start with paper trading and small position sizes.
 
 ### 📊 How It Works
