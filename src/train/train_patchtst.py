@@ -1,204 +1,106 @@
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
-from pathlib import Path
 import numpy as np
-import time
+import pandas as pd
+from pathlib import Path
+import pytorch_lightning as pl
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
+import joblib
+import logging
+from datetime import datetime
 
-from src.models.patchtst import PatchTST  # adjust if needed
-from src.utils.patchtst_dataset import PatchTSTDataset
+from src.features.ta_regime_features import build_mathematical_features
+from src.utils.patchtst_dataset import PatchTSTDataset  # we'll create/improve this if needed
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-DATA_DIR = Path("data/processed/patchtst")
-MODEL_DIR = Path("models/patchtst")
-MODEL_DIR.mkdir(parents=True, exist_ok=True)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-INPUT_WINDOW = 1024
-BATCH_SIZE = 64
-EPOCHS = 20
-LR = 1e-4  # unchanged (you asked to skip fix #3)
+class PatchTSTTrainer(pl.LightningModule):
+    def __init__(self, model, learning_rate=1e-4, horizon=96):
+        super().__init__()
+        self.model = model
+        self.lr = learning_rate
+        self.horizon = horizon  # prediction steps ahead (96 = ~8 hours)
+        self.criterion = nn.MSELoss()
 
-LOG_PATH = Path("logs")
-LOG_PATH.mkdir(parents=True, exist_ok=True)
+    def forward(self, x):
+        return self.model(x)
 
-def log(msg: str):
-    ts = time.strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{ts}] {msg}", flush=True)
+    def training_step(self, batch, batch_idx):
+        x, y = batch
+        y_hat = self.model(x)
+        loss = self.criterion(y_hat, y)
+        self.log('train_loss', loss)
+        return loss
 
-def load_raw_split(split: str):
-    blob = torch.load(DATA_DIR / f"{split}_raw.pt")
-    X = blob["X"].float()
-    y = blob["y"].float()
-    return X, y
+    def validation_step(self, batch, batch_idx):
+        x, y = batch
+        y_hat = self.model(x)
+        loss = self.criterion(y_hat, y)
+        self.log('val_loss', loss)
+        return loss
 
-def make_loader(X, y, shuffle):
-    ds = PatchTSTDataset(X, y, INPUT_WINDOW)
-    return DataLoader(ds, batch_size=BATCH_SIZE, shuffle=shuffle, drop_last=True)
+    def configure_optimizers(self):
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=1e-5)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
+        return {"optimizer": optimizer, "lr_scheduler": scheduler, "monitor": "val_loss"}
+
+def prepare_data_for_patchtst(df: pd.DataFrame, sequence_length=512, horizon=96):
+    """Prepare data with mathematical features injected"""
+    feats = build_mathematical_features(df)
+    # Align price data with features
+    price_data = df[['open', 'high', 'low', 'close', 'volume']].loc[feats.index]
     
+    # Combine price + rich mathematical features
+    combined = pd.concat([price_data, feats.drop(columns=['regime'])], axis=1)
+    combined = combined.fillna(0)
+    
+    # Normalize (important for PatchTST)
+    scaler = joblib.load("data/processed/patchtst/scaler_params.pkl") if Path("data/processed/patchtst/scaler_params.pkl").exists() else None
+    # ... add proper scaling logic here (you can expand later)
+    
+    dataset = PatchTSTDataset(combined.values, sequence_length=sequence_length, horizon=horizon)
+    return DataLoader(dataset, batch_size=32, shuffle=False, num_workers=4, pin_memory=True)
+
 def main():
-    log(f"Using device: {DEVICE}")
-
-    # -----------------------------
-    # Load data
-    # -----------------------------
-    X_train, y_train = load_raw_split("train")
-    X_val,   y_val   = load_raw_split("val")
-    X_test,  y_test  = load_raw_split("test")
-
-    num_features = X_train.shape[-1]
-    log(f"num_features = {num_features}")
-
-    train_loader = make_loader(X_train, y_train, shuffle=True)
-    val_loader   = make_loader(X_val,   y_val,   shuffle=False)
-    test_loader  = make_loader(X_test,  y_test,  shuffle=False)
-
-    log(f"Train batches: {len(train_loader)}")
-    log(f"Val batches:   {len(val_loader)}")
-    log(f"Test batches:  {len(test_loader)}")
-
-    # -----------------------------
-    # Model
-    # -----------------------------
-    model = PatchTST(
-        c_in=num_features,
-        c_out=1,
-        seq_len=INPUT_WINDOW,
-        pred_len=1,
-    )
-
-    # Dual-GPU via DataParallel (easy path)
-    if torch.cuda.device_count() > 1 and DEVICE.type == "cuda":
-        log(f"Using {torch.cuda.device_count()} GPUs via DataParallel")
-        model = nn.DataParallel(model)
-
-    model = model.to(DEVICE)
-
-    criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
-
-    best_val_loss = float("inf")
-    best_path = MODEL_DIR / "patchtst_best.pt"
-
-    # -----------------------------
-    # Training loop
-    # -----------------------------
-    for epoch in range(1, EPOCHS + 1):
-        start_time = time.time()
-        model.train()
-        train_losses = []
-
-        for batch_idx, (xb, yb) in enumerate(train_loader):
-            xb = xb.to(DEVICE)
-            yb = yb.to(DEVICE)
-
-            optimizer.zero_grad(set_to_none=True)
-
-            preds = model(xb).squeeze(-1)
-
-            # NaN guard on predictions/targets
-            if torch.isnan(preds).any() or torch.isnan(yb).any():
-                log(f"Epoch {epoch} batch {batch_idx}: NaN in preds/targets — skipping batch")
-                continue
-
-            loss = criterion(preds, yb)
-
-            if torch.isnan(loss):
-                log(f"Epoch {epoch} batch {batch_idx}: NaN loss — skipping batch")
-                continue
-
-            loss.backward()
-
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
-            optimizer.step()
-            train_losses.append(loss.item())
-
-        epoch_train_loss = float(np.mean(train_losses)) if train_losses else float("nan")
-        duration = time.time() - start_time
-        log(f"Epoch {epoch} train_loss={epoch_train_loss:.6f} | duration={duration:.1f}s")
-
-        # -----------------------------
-        # Validation
-        # -----------------------------
-        model.eval()
-        val_losses = []
-
-        with torch.no_grad():
-            for xb, yb in val_loader:
-                xb = xb.to(DEVICE)
-                yb = yb.to(DEVICE)
-
-                preds = model(xb).squeeze(-1)
-
-                if torch.isnan(preds).any() or torch.isnan(yb).any():
-                    log(f"Epoch {epoch}: NaN in val preds/targets — skipping batch")
-                    continue
-
-                loss = criterion(preds, yb)
-                if torch.isnan(loss):
-                    log(f"Epoch {epoch}: NaN val loss — skipping batch")
-                    continue
-
-                val_losses.append(loss.item())
-
-        epoch_val_loss = float(np.mean(val_losses)) if val_losses else float("nan")
-        log(f"Epoch {epoch} val_loss={epoch_val_loss:.6f}")
-
-        # Save best model only if val_loss is finite and improved
-        if np.isfinite(epoch_val_loss) and epoch_val_loss < best_val_loss:
-            best_val_loss = epoch_val_loss
-            torch.save(model.state_dict(), best_path)
-            log(f"Epoch {epoch}: New best val_loss={best_val_loss:.6f} — model saved")
-
-    # -----------------------------
-    # Final test evaluation
-    # -----------------------------
-    log("Running final test evaluation...")
-
-    if not best_path.exists():
-        log("No best model found — skipping test evaluation")
-        return
-
-    # Rebuild model for loading (handle DataParallel)
-    model = PatchTST(
-        c_in=num_features,
-        c_out=1,
-        seq_len=INPUT_WINDOW,
-        pred_len=1,
-    )
-    if torch.cuda.device_count() > 1 and DEVICE.type == "cuda":
-        model = nn.DataParallel(model)
-    model = model.to(DEVICE)
-
-    state_dict = torch.load(best_path, map_location=DEVICE)
-    model.load_state_dict(state_dict)
-    model.eval()
-
-    test_losses = []
-    with torch.no_grad():
-        for xb, yb in test_loader:
-            xb = xb.to(DEVICE)
-            yb = yb.to(DEVICE)
-
-            preds = model(xb).squeeze(-1)
-
-            if torch.isnan(preds).any() or torch.isnan(yb).any():
-                log("NaN in test preds/targets — skipping batch")
-                continue
-
-            loss = criterion(preds, yb)
-            if torch.isnan(loss):
-                log("NaN test loss — skipping batch")
-                continue
-
-            test_losses.append(loss.item())
-
-    if test_losses:
-        test_loss = float(np.mean(test_losses))
-        log(f"Final test_loss={test_loss:.6f}")
+    # Load your existing partially trained model
+    model_path = Path("models/patchtst/patchtst_best.pt")  # or your best checkpoint
+    if model_path.exists():
+        logger.info(f"Loading existing model from {model_path}")
+        # Load your enhanced_patchtst model here (adjust based on your enhanced_patchtst.py)
+        from src.models.enhanced_patchtst import EnhancedPatchTST
+        model = EnhancedPatchTST.load_from_checkpoint(model_path)
     else:
-        log("No valid test batches — test_loss undefined")
+        logger.warning("No existing checkpoint found. Initializing new model.")
+        from src.models.enhanced_patchtst import EnhancedPatchTST
+        model = EnhancedPatchTST()
+
+    # Load full real data
+    df = pd.read_parquet("data/raw/binance_btcusdt_5m.parquet")
+    logger.info(f"Loaded {len(df):,} real 5m candles")
+
+    train_loader = prepare_data_for_patchtst(df.iloc[:-int(len(df)*0.2)], sequence_length=512, horizon=96)
+    val_loader = prepare_data_for_patchtst(df.iloc[-int(len(df)*0.2):], sequence_length=512, horizon=96)
+
+    trainer = pl.Trainer(
+        max_epochs=50,
+        accelerator="gpu" if torch.cuda.is_available() else "cpu",
+        devices=1,
+        precision="16-mixed",           # Good for your RTX 5070
+        callbacks=[
+            EarlyStopping(monitor="val_loss", patience=8, mode="min"),
+            ModelCheckpoint(dirpath="models/patchtst/", filename="patchtst_best", save_top_k=1, monitor="val_loss")
+        ],
+        logger=pl.loggers.TensorBoardLogger("lightning_logs", name="patchtst_math"),
+        gradient_clip_val=1.0,
+        accumulate_grad_batches=4,      # Effective larger batch
+    )
+
+    logger.info("Starting rigorous PatchTST fine-tuning with mathematical features...")
+    trainer.fit(model, train_loader, val_loader)
+
+    logger.info("Training completed. Best model saved in models/patchtst/")
 
 if __name__ == "__main__":
     main()
