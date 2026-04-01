@@ -125,7 +125,8 @@ bash launch_patchtst.sh
 python -m src.train.train_model      # for LightGBM
 ```
 6. Run the Dashboard
-```bash python streamlit run src/app_dashboard.py
+```bash 
+python streamlit run src/app_dashboard.py
 ```
 7. Run Live Trading (Paper or Real)
 ```bash
