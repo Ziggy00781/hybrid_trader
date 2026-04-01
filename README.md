@@ -24,46 +24,84 @@ A modular, production-ready framework that combines **classical machine learning
 
 ```mermaid
 flowchart TD
-    A[Raw Data\nBinance + Bybit] --> B[Data Merge & Resample]
-    B --> C[Feature Engineering\nTA + Regime + FM Forecasts]
-    C --> D1[LightGBM Model\nDashboard & Backtest]
-    C --> D2[PatchTST Transformer\nLive Trading]
-    C --> D3[Foundation Models\nTimeFM / Chronos / TimeGPT]
-    D1 & D2 --> E[Signal Generation\nLong / Short / Flat]
-    E --> F[Backtester]
-    E --> G[Live Trading Loop\nBybit]
-    F & G --> H[Performance Visualization\nEquity Curve + Trades]
+    A["Raw Data\n(Binance + Bybit 5m OHLCV)"] 
+    --> B["Data Preparation\n(Merge + Resample + Enhanced)"]
+
+    B --> C["Feature Engineering\nTA Indicators + Regime Detection\n(src/features/ta_regime_features.py)"]
+
+    C --> D1["LightGBM Model\n(Dashboard + Backtesting)"]
+    C --> D2["PatchTST Transformer\n(Live Trading Inference)"]
+
+    D1 --> E["Signal Generation\n(Probability + Regime Filter)"]
+    D2 --> E
+
+    E --> F["Backtester\n(TP/SL + Equity Curve)"]
+    E --> G["Live Trading Loop\n(Bybit via runtime.py / live_loop.py)"]
+
+    F --> H["Performance Visualization\n(Equity Curve + Trade Markers)"]
+    G --> H
+
+    subgraph Dashboard
+        D1
+        F
+        H
+    end
+
+    subgraph Live Trading
+        D2
+        G
+    end
+
+    classDef active fill:#E6D9FF,stroke:#333,stroke-width:3px,color:#000
+    class A,B,C,D1,D2,E,F,G,H active
 ```
     
 Core Idea: Use PatchTST for the live forecasting engine and LightGBM for quick iteration and explainability. Foundation models enrich features or serve as experimental baselines.
 📁 Project Structure
 
-Bashhybrid_trader/
-├── src/
-│   ├── app_dashboard.py                 # Streamlit dashboard
-│   ├── backtest/
-│   │   └── backtester.py
-│   ├── data_fetch/                      # Binance & Bybit fetchers
-│   ├── features/
-│   │   ├── build_features.py
-│   │   └── ta_regime_features.py        # TA + regime + FM features
-│   ├── live/
-│   │   ├── runtime.py                   # Main live inference
-│   │   └── live_loop.py
-│   ├── models/                          # Training & inference scripts
-│   └── utils/
-├── data/                                # (not in repo — gitignored)
-│   ├── raw/ / processed/ / enhanced/
-├── models/                              # (not in repo — gitignored)
-│   ├── btcusdt_5m_lgbm.pkl
-│   └── patchtst/                        # PatchTST checkpoints
-├── lightning_logs/                      # PyTorch Lightning logs
-├── scripts/                             # Shell scripts (move your .sh files here)
-├── requirements.txt
-├── bootstrap_gpu.sh
-├── prepare_data.sh
-├── launch_patchtst.sh
-└── README.md
+- 📁 C:.
+  - 📄 .gitignore
+  - 📄 bootstrap_gpu.sh
+  - 📄 filetree.txt
+  - 📄 launch_patchtst.sh
+  - 📄 predictions.png
+  - 📄 prepare_data.sh
+  - 📄 price_vs_prediction2.png
+  - 📄 qwen.html
+  - 📄 README.md
+  - 📄 requirements.txt
+  - 📁 src
+  - 📄 app_dashboard.py
+  - 📄 test.py
+  - 📁 analysis
+    - 📄 visualize_predictions.py
+    - 📄 visualize_price_vs_prediction.py
+  - 📁 backtest
+    - 📄 backtester.py
+  - 📁 data_fetch
+    - 📄 binance_ohlcv.py
+    - 📄 build_data.py
+    - 📄 bybit_ohlcv.py
+    - 📄 enhanced_data_collector.py
+  - 📁 features
+    - 📄 build_features.py
+    - 📄 ta_regime_features.py
+  - 📁 live
+    - 📄 api.py
+    - 📄 live_loop.py
+    - 📄 OLDruntime.py
+    - 📄 runtime.py
+  - 📁 train
+    - 📄 train_enhanced_patchtst.py
+    - 📄 train_model.py
+    - 📄 train_patchtst.py
+  - 📁 utils
+- 📄 binance_archive_fetch.py
+- 📄 device.py
+- 📄 parquet_merge.py
+- 📄 patchtst_dataset.py
+- 📄 prepare_patchtst_dataset.py
+- 📄 resample_5m.py
 
 🚀 Quick Start
 1. Clone the repository
@@ -143,3 +181,6 @@ This project is licensed under the MIT License — see the LICENSE file for deta
 
 ### Made with ❤️ in Hawaii by Ziad (Ziggy00781)
 Questions or ideas? Open an issue or reach out!
+
+### Donations accepted!
+Bitcoin Address: bc1qgxhaqx96t2esdj73qdkx6un5wun48jxs62ndfu
