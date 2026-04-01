@@ -108,7 +108,7 @@ Core Idea: Use PatchTST for the live forecasting engine and LightGBM for quick i
 Bashgit clone https://github.com/Ziggy00781/hybrid_trader.git
 cd hybrid_trader
 2. Install dependencies
-Bashpip install -r requirements.txt
+```Bash pip install -r requirements.txt ```
 3. (Optional) GPU Environment Setup
 Bashbash bootstrap_gpu.sh
 4. Prepare Data
