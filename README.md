@@ -24,36 +24,59 @@ A modular, production-ready framework that combines **classical machine learning
 
 ```mermaid
 flowchart TD
-    A["Raw Data\n(Binance + Bybit 5m OHLCV)"] 
-    --> B["Data Preparation\n(Merge + Resample + Enhanced)"]
+    %% Data Layer
+    A["Multi-Asset Raw Data\n(Crypto: Binance/Bybit/CCXT • Stocks: yfinance/Polygon)\nOHLCV + Fundamentals + News Feeds"] 
+        --> B["Data Ingestion & Preparation\n(Merge • Resample to User Timeframe\nGap Handling • Caching)"]
 
-    B --> C["Feature Engineering\nTA Indicators + Regime Detection\n(src/features/ta_regime_features.py)"]
+    %% Feature & Analysis Engine
+    B --> C["Advanced Feature Engineering\nTA Indicators + Volume + Market Context"]
+    C --> D["Mathematical Analysis Engine"]
+    D --> D1["Fourier Transform\n(Cycle Detection & Periodic Structures)"]
+    D --> D2["Markov Chain / HMM\n(Regime Detection: Trending / Ranging / Volatile)"]
+    D --> D3["Stochastic Analysis\n(Probabilistic Patterns & Randomness)"]
+    
+    %% Time-Series Prediction
+    C --> E["Time-Series Prediction Models\n(PatchTST + LightGBM Ensemble + Foundation Models)\nProbabilistic Forecasts (up to 20 bars)"]
 
-    C --> D1["LightGBM Model\n(Dashboard + Backtesting)"]
-    C --> D2["PatchTST Transformer\n(Live Trading Inference)"]
+    %% LLM Research Layer
+    A --> F["Real-Time & Historical Research\n(News API + Market Narratives)"]
+    F --> G["LLM Integration Layer\n(Sentiment • Narrative Extraction • Macro/Geopolitical Context)\n(Ollama / Groq / OpenAI)"]
 
-    D1 --> E["Signal Generation\n(Probability + Regime Filter)"]
-    D2 --> E
+    %% Fusion & Decision Support
+    D1 & D2 & D3 & E & G --> H["Unified Insight & Decision Support Engine\n(Fusion of Quant + LLM Outputs)"]
+    H --> I["Actionable Outputs\n• Probabilistic Direction & Magnitude\n• Scenario Outlooks (Bullish/Bearish/Neutral)\n• Explainable 'Why' + Strategy Suggestions"]
 
-    E --> F["Backtester\n(TP/SL + Equity Curve)"]
-    E --> G["Live Trading Loop\n(Bybit via runtime.py / live_loop.py)"]
+    %% Execution & Visualization
+    I --> J["Backtesting Engine\n(Multi-Asset • Realistic Slippage/Fees • Walk-Forward)"]
+    I --> K["Live/Paper Trading Loop\n(Broker-Agnostic via CCXT/Alpaca/IBKR)"]
+    
+    J & K --> L["Interactive Streamlit Dashboard\n(Asset Selector • Dynamic Charts • Real-Time Insights\nRegime/Cycle Overlays • Sentiment Gauges)"]
 
-    F --> H["Performance Visualization\n(Equity Curve + Trade Markers)"]
-    G --> H
-
-    subgraph Dashboard
-        D1
-        F
-        H
+    %% Infrastructure
+    subgraph "Infrastructure & Config"
+        M["Config Management\n(config.yaml: Assets, Models, Risk Params, LLM Provider)"]
+        N["Caching & Storage\n(Parquet/ArcticDB)"]
+        O["GPU/Compute Support\n(Training & Inference)"]
+        P["Scheduling & Alerts\n(Celery/Airflow • Telegram/Email)"]
     end
 
-    subgraph Live Trading
-        D2
-        G
-    end
+    B & E & G & H -.-> M
+    J & K -.-> O
+    L -.-> P
 
-    classDef active fill:#E6D9FF,stroke:#333,stroke-width:3px,color:#000
-    class A,B,C,D1,D2,E,F,G,H active
+    classDef data fill:#E3F2FD,stroke:#1976D2,stroke-width:2px
+    classDef analysis fill:#E8F5E9,stroke:#388E3C,stroke-width:2px
+    classDef llm fill:#F3E5F5,stroke:#7B1FA2,stroke-width:2px
+    classDef decision fill:#FFF3E0,stroke:#F57C00,stroke-width:3px
+    classDef execution fill:#FCE4EC,stroke:#C2185B,stroke-width:2px
+    classDef ui fill:#E0F2F1,stroke:#00796B,stroke-width:2px
+
+    class A,B data
+    class C,D,D1,D2,D3,E analysis
+    class F,G llm
+    class H,I decision
+    class J,K execution
+    class L ui
 ```
     
 Core Idea: Use PatchTST for the live forecasting engine and LightGBM for quick iteration and explainability. Foundation models enrich features or serve as experimental baselines.
