@@ -3,9 +3,11 @@ import json
 import pandas as pd
 import os
 import time
+import signal
+import sys
 from datetime import datetime
 
-# Configuration
+# Config
 SYMBOL = "btcusdt"
 DATA_DIR = "data/ticks/BTC_USDT"
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -32,7 +34,7 @@ def save_buffer(force=False):
             else:
                 combined = new_df
             combined.to_parquet(file_path, index=False)
-            print(f"💾 Saved {len(buffer)} ticks | Total: {len(combined)} | Last price: ${combined['price'].iloc[-1]:,.2f}")
+            print(f"💾 Saved {len(buffer):,} ticks | Total: {len(combined):,} | Last price: ${combined['price'].iloc[-1]:,.2f}")
             buffer.clear()
             last_save = time.time()
         except Exception as e:
@@ -54,15 +56,20 @@ def on_message(ws, message):
         print(f"Msg error: {e}")
 
 def on_error(ws, error):
-    print(f"Error: {error}")
+    print(f"WebSocket error: {error}")
 
 def on_close(ws, close_status_code, close_msg):
-    print("Connection closed, reconnecting in 5s...")
-    time.sleep(5)
-    start_websocket()
+    print(f"Connection closed (code: {close_status_code}). Reconnecting in 10s...")
 
 def on_open(ws):
     print("✅ Connected to Binance trade stream!")
+
+def signal_handler(sig, frame):
+    print("\n🛑 Stopping recorder...")
+    save_buffer(force=True)
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
 
 def start_websocket():
     ws = websocket.WebSocketApp(
@@ -75,10 +82,11 @@ def start_websocket():
     ws.run_forever(ping_interval=30, ping_timeout=10)
 
 if __name__ == "__main__":
-    print("Starting simple Binance tick recorder...")
+    print("🚀 Starting simple Binance tick recorder...")
+    print("Press Ctrl+C to stop cleanly")
     while True:
         try:
             start_websocket()
         except Exception as e:
             print(f"Restarting due to error: {e}")
-            time.sleep(5)
+            time.sleep(10)
