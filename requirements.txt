@@ -1,18 +1,28 @@
-pandas 
-numpy 
-ta 
-lightgbm 
-streamlit 
-plotly 
-ccxt 
-pyarrow 
-transformers 
-accelerate 
-einops 
-chronos-forecasting
-fastapi
-uvicorn
+# Core Data & Computation
+pandas>=2.2.0
+numpy>=1.26.0
+pyarrow>=12.0.0
+
+# Technical Analysis & ML
+ta>=0.11.0
+lightgbm>=4.0.0
+
+# Dashboard & Visualization
+streamlit>=1.38.0
+plotly>=5.24.0
+
+# Exchange & Trading
 ccxt>=4.3.0
-alpaca-py
-websockets
-python-binance
+python-binance>=1.0.0
+alpaca-py>=0.43.0
+
+# Web & API
+fastapi>=0.110.0
+uvicorn>=0.30.0
+websockets>=12.0
+
+# AI / Forecasting
+transformers>=4.40.0
+accelerate>=0.30.0
+einops>=0.8.0
+chronos-forecasting>=2.0.0
