@@ -1,143 +1,103 @@
-# src/recorder/tick_recorder.py
-"""
-24/7 Binance BTC/USDT Tick Recorder with Gap Detection
-"""
-
-import asyncio
-import json
-import logging
-import os
-from datetime import datetime, timedelta
-import pandas as pd
-import websockets
 import time
-from src.data_fetch.unified_fetcher import UnifiedDataFetcher
+import pandas as pd
+import os
+import nest_asyncio   # ← Added to fix event loop issues
+from datetime import datetime
+from binance import ThreadedWebsocketManager
+import logging
 
+nest_asyncio.apply()   # This patches asyncio for Python 3.10+ compatibility
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)s | %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-SYMBOL = "btcusdt"
-SAVE_DIR = "data/ticks/BTC_USDT"
-os.makedirs(SAVE_DIR, exist_ok=True)
+class TickRecorder:
+    def __init__(self, symbol: str = "BTCUSDT"):
+        self.symbol = symbol
+        self.buffer = []
+        self.last_save_time = time.time()
+        self.save_interval = 5
+        self.max_buffer_size = 10000
 
-# Global state
-current_date = None
-buffer = []
-tick_count_today = 0
-last_log_time = time.time()
-last_trade_time = None   # To detect gaps
+        self.today = datetime.now().date()
+        self.data_dir = "data/ticks/BTC_USDT"
+        os.makedirs(self.data_dir, exist_ok=True)
+        self.current_file = self._get_today_file()
 
+    def _get_today_file(self):
+        date_str = self.today.strftime("%Y-%m-%d")
+        return os.path.join(self.data_dir, f"BTC_USDT_{date_str}.parquet")
 
-async def save_buffer():
-    global buffer, current_date, tick_count_today
-    if not buffer:
-        return
+    def _save_buffer(self, force: bool = False):
+        if not self.buffer:
+            return
+        if force or (time.time() - self.last_save_time >= self.save_interval) or len(self.buffer) >= self.max_buffer_size:
+            try:
+                new_df = pd.DataFrame(self.buffer)
+                if os.path.exists(self.current_file):
+                    existing = pd.read_parquet(self.current_file)
+                    combined = pd.concat([existing, new_df], ignore_index=True)
+                else:
+                    combined = new_df
 
-    df = pd.DataFrame(buffer, columns=["timestamp", "price", "quantity", "is_buyer_maker"])
-    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-    df.set_index("timestamp", inplace=True)
+                combined.to_parquet(self.current_file, index=False)
+                logger.info(f"💾 Saved {len(self.buffer):,} ticks | Total: {len(combined):,} | Last price: ${combined['price'].iloc[-1]:,.2f}")
+                self.buffer.clear()
+                self.last_save_time = time.time()
+            except Exception as e:
+                logger.error(f"Save failed: {e}")
 
-    filename = f"{SAVE_DIR}/BTC_USDT_{current_date}.parquet"
-    df.to_parquet(filename, compression="snappy")
-    
-    logger.info(f"💾 Saved {len(df):,} ticks for {current_date} | Total today: {tick_count_today:,}")
-    buffer = []
-
-
-async def backfill_gap(start_time, end_time):
-    """Try to backfill small gaps using historical data"""
-    logger.info(f"Attempting to backfill gap from {start_time} to {end_time}")
-    try:
-        fetcher = UnifiedDataFetcher()
-        # Use 1m candles to backfill (good compromise)
-        df = fetcher.fetch_data(
-            symbol="BTC/USDT",
-            timeframe="1m",
-            start_date=start_time,
-            end_date=end_time,
-            source="ccxt"
-        )
-        if not df.empty:
-            logger.info(f"Backfilled {len(df)} 1m candles for the gap")
-            # Note: Converting 1m candles to ticks is approximate - we can improve later
-    except Exception as e:
-        logger.warning(f"Backfill failed: {e}")
-
-
-async def tick_recorder():
-    global current_date, buffer, tick_count_today, last_log_time, last_trade_time
-
-    url = f"wss://stream.binance.com:9443/ws/{SYMBOL}@aggTrade"
-
-    logger.info(f"🚀 Starting 24/7 tick recorder for {SYMBOL.upper()}...")
-
-    while True:
+    def handle_message(self, msg):
         try:
-            async with websockets.connect(url) as ws:
-                logger.info("✅ Connected to Binance WebSocket")
+            if msg.get('e') == 'trade':
+                trade = {
+                    'timestamp': pd.to_datetime(msg['T'], unit='ms'),
+                    'price': float(msg['p']),
+                    'quantity': float(msg['q']),
+                    'is_buyer_maker': bool(msg['m'])
+                }
+                self.buffer.append(trade)
+                self._save_buffer()
 
-                while True:
-                    message = await ws.recv()
-                    data = json.loads(message)
-
-                    trade_time = data["T"]
-                    trade = {
-                        "timestamp": trade_time,
-                        "price": float(data["p"]),
-                        "quantity": float(data["q"]),
-                        "is_buyer_maker": data["m"],
-                    }
-
-                    # Detect gap
-                    if last_trade_time is not None:
-                        gap_seconds = (trade_time - last_trade_time) / 1000
-                        if gap_seconds > 10:   # more than 10 seconds gap
-                            logger.warning(f"Gap detected: {gap_seconds:.1f} seconds")
-                            # Optional: try to backfill small gaps
-                            if gap_seconds < 300:  # less than 5 minutes
-                                await backfill_gap(
-                                    datetime.utcfromtimestamp(last_trade_time/1000),
-                                    datetime.utcfromtimestamp(trade_time/1000)
-                                )
-
-                    last_trade_time = trade_time
-                    buffer.append(trade)
-                    tick_count_today += 1
-
-                    # Progress log every 10 seconds
-                    if time.time() - last_log_time > 10:
-                        logger.info(f"📊 Today: {tick_count_today:,} ticks | "
-                                  f"Buffer: {len(buffer):,} | Last price: ${trade['price']:,.2f}")
-                        last_log_time = time.time()
-
-                    # Daily rotation
-                    trade_date = datetime.utcfromtimestamp(trade_time / 1000).date()
-                    if current_date is None:
-                        current_date = trade_date
-                    elif trade_date != current_date:
-                        await save_buffer()
-                        current_date = trade_date
-                        tick_count_today = 0
-                        last_trade_time = None
-
+                if datetime.now().date() != self.today:
+                    logger.info("🌅 New day - rolling file")
+                    self._save_buffer(force=True)
+                    self.today = datetime.now().date()
+                    self.current_file = self._get_today_file()
+                    self.buffer.clear()
         except Exception as e:
-            logger.error(f"Connection lost: {e}. Reconnecting in 5s...")
-            await asyncio.sleep(5)
+            logger.error(f"Msg error: {e}")
 
+    def start(self):
+        logger.info(f"🚀 Starting recorder for {self.symbol}...")
 
-def main():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
-    )
+        for attempt in range(8):  # More attempts
+            try:
+                twm = ThreadedWebsocketManager()
+                twm.start()
+                twm.start_trade_socket(callback=self.handle_message, symbol=self.symbol.lower())
+                logger.info("✅ Websocket connected!")
+                break
+            except Exception as e:
+                logger.warning(f"Attempt {attempt+1}/8 failed: {e}")
+                time.sleep(8 if attempt > 2 else 4)
+        else:
+            logger.error("❌ Could not connect after retries. Check internet/DNS/VPN.")
+            return
 
-    try:
-        asyncio.run(tick_recorder())
-    except KeyboardInterrupt:
-        logger.info("⛔ Recorder stopped by user. Saving final buffer...")
-        asyncio.run(save_buffer())
-        logger.info("✅ Recorder shut down cleanly.")
+        try:
+            while True:
+                time.sleep(1)
+                self._save_buffer()
+        except KeyboardInterrupt:
+            logger.info("🛑 Stopping - final save")
+            self._save_buffer(force=True)
+            twm.stop()
 
 
 if __name__ == "__main__":
-    main()
+    recorder = TickRecorder()
+    recorder.start()

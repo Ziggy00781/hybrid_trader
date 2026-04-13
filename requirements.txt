@@ -15,3 +15,4 @@ uvicorn
 ccxt>=4.3.0
 alpaca-py
 websockets
+python-binance
