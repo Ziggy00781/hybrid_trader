@@ -1,8 +1,13 @@
-import torch
-import numpy as np
-from pathlib import Path
+import glob
+import pandas as pd
 
-blob = torch.load(Path("data/processed/patchtst/train_raw.pt"))
-y = blob["y"].numpy()
-print("min:", y.min(), "max:", y.max(), "mean:", y.mean(), "std:", y.std())
-print("any nan:", np.isnan(y).any(), "any inf:", np.isinf(y).any())
+# Step 1: Find all matching files
+file_paths = glob.glob("data/ticks/BTC_USDT/BTC_USDT_*.parquet")
+
+if not file_paths:
+    print("No files found. Check the directory and file names.")
+else:
+    # Step 2: Read the first file (or combine all files)
+    df = pd.read_parquet(file_paths[0])
+    print("First file loaded successfully:")
+    print(df.head())
