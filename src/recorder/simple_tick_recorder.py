@@ -6,11 +6,13 @@ import time
 import signal
 import sys
 from datetime import datetime
+import tempfile
+import shutil
 
 # ================== CONFIG ==================
 SYMBOL = "btcusdt"
 DATA_DIR = "data/ticks/BTC_USDT"
-SAVE_INTERVAL = 5          # seconds
+SAVE_INTERVAL = 5
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -29,18 +31,24 @@ def save_buffer(force=False):
         try:
             new_df = pd.DataFrame(buffer)
             file_path = get_today_file()
-            
+            temp_path = file_path + ".tmp"
+
             if os.path.exists(file_path):
                 existing = pd.read_parquet(file_path)
                 combined = pd.concat([existing, new_df], ignore_index=True)
             else:
                 combined = new_df
-                
-            combined.to_parquet(file_path, index=False)
+
+            # Atomic write: write to temp file first, then rename (much safer)
+            combined.to_parquet(temp_path, index=False)
+            shutil.move(temp_path, file_path)   # atomic operation
+
             print(f"💾 Saved {len(buffer):,} ticks | Total: {len(combined):,} | "
                   f"Last price: ${combined['price'].iloc[-1]:,.2f} | {datetime.now().strftime('%H:%M:%S')}")
+            
             buffer.clear()
             last_save = time.time()
+
         except Exception as e:
             print(f"Save error: {e}")
 
