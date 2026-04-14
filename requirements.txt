@@ -1,30 +1,56 @@
-# Core Data & Computation
-pandas>=2.2.0
-numpy>=1.26.0
-pyarrow>=12.0.0
-fastparquet>=2024.2.0
+# ======================
+# Core Data & Computation (High-Volume Tick Data)
+# ======================
+pandas>=3.0.0
+numpy>=2.1.0
+pyarrow>=15.0.0          # Required for Pandas 3.x + excellent for large Parquet tick files
+polars>=1.0.0            # Blazing-fast alternative to pandas for massive tick datasets
+numba>=0.60.0            # JIT compilation for custom tick-level feature engineering
 
+# Parquet & I/O
+pyarrow>=15.0.0
+
+# Progress & Utilities
+tqdm>=4.66.0
+requests>=2.32.0
+joblib>=1.4.0            # Parallel processing when merging/processing years of ticks
+
+# ======================
 # Technical Analysis & ML
-ta>=0.11.0
+# ======================
+ta>=0.11.0               # Technical indicators
 lightgbm>=4.0.0
 
+# ======================
 # Dashboard & Visualization
-streamlit>=1.38.0
+# ======================
+streamlit>=1.40.0
 plotly>=5.24.0
 
+# ======================
 # Exchange & Trading
-ccxt>=4.3.0
+# ======================
+ccxt>=4.3.0              # Used for top-10 symbol detection
 python-binance>=1.0.0
 alpaca-py>=0.43.0
 
+# ======================
 # Web & API
-fastapi>=0.110.0
+# ======================
+fastapi>=0.115.0
 uvicorn>=0.30.0
-websockets>=12.0
+websockets>=13.0
 websocket-client>=1.8.0
 
-# AI / Forecasting
-transformers>=4.40.0
-accelerate>=0.30.0
+# ======================
+# AI / Forecasting / Time-Series
+# ======================
+transformers>=4.45.0
+accelerate>=0.35.0
 einops>=0.8.0
-chronos-forecasting>=2.0.0
+chronos-forecasting>=2.2.0     # Latest Chronos-2 / Bolt models (great for tick-derived series)
+
+# Optional: Extra ML ecosystem (uncomment if you expand)
+# torch>=2.4.0
+# scikit-learn>=1.5.0
+# xgboost>=2.1.0
