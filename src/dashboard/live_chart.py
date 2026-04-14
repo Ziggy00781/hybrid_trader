@@ -8,7 +8,6 @@ from datetime import datetime
 
 st.set_page_config(page_title="Live BTC Chart", layout="wide", initial_sidebar_state="collapsed")
 
-# Title
 st.markdown("""
     <h1 style='text-align: center; color: #00ff88; margin-bottom: 8px;'>BTC/USDT Live</h1>
     <p style='text-align: center; color: #aaaaaa; font-size: 18px; margin-top: 0;'>1 Minute Candles • Real-time Tick Data</p>
@@ -23,16 +22,22 @@ def get_latest_tick_file():
         st.stop()
     return max(files, key=os.path.getmtime)
 
-@st.cache_data(ttl=3)
+@st.cache_data(ttl=4, show_spinner=False)
 def load_latest_ticks(file_path):
-    try:
-        return pd.read_parquet(file_path)
-    except Exception as e:
-        st.error(f"Error reading parquet file: {e}")
-        st.stop()
+    """Safe loading with retry for concurrent write issues"""
+    for attempt in range(5):
+        try:
+            return pd.read_parquet(file_path)
+        except Exception as e:
+            if attempt == 4:
+                st.warning(f"Could not read parquet file after retries: {e}")
+                time.sleep(1)
+                return pd.DataFrame()
+            time.sleep(0.5)  # Wait a bit and retry
+    return pd.DataFrame()
 
 def ticks_to_candles(ticks_df):
-    if ticks_df.empty:
+    if ticks_df.empty or len(ticks_df) < 10:
         return pd.DataFrame()
 
     if not isinstance(ticks_df.index, pd.DatetimeIndex):
@@ -55,26 +60,23 @@ latest_file = get_latest_tick_file()
 ticks = load_latest_ticks(latest_file)
 candles = ticks_to_candles(ticks)
 
-if not candles.empty and len(candles) >= 2:
-    display_df = candles.tail(300).copy()   # Last ~5 hours
+if not candles.empty and len(candles) >= 5:
+    display_df = candles.tail(300).copy()
 
     current_price = display_df['close'].iloc[-1]
     prev_price = display_df['close'].iloc[-2]
     price_change = current_price - prev_price
 
-    # Correct Volume Calculations
     last_vol_btc = display_df['volume'].iloc[-1]
     last_vol_usdt = last_vol_btc * current_price
 
-    # Big Price Display
     col_price, col_vol = st.columns([3, 1])
     
     with col_price:
         st.metric(
             label="Current BTC Price",
             value=f"${current_price:,.2f}",
-            delta=f"{price_change:+.2f}",
-            delta_color="normal"
+            delta=f"{price_change:+.2f}"
         )
     
     with col_vol:
@@ -84,9 +86,8 @@ if not candles.empty and len(candles) >= 2:
             delta=f"${last_vol_usdt:,.0f} USDT"
         )
 
-    # Main Chart
+    # Chart
     fig = go.Figure()
-
     fig.add_trace(go.Candlestick(
         x=display_df.index,
         open=display_df['open'],
@@ -97,7 +98,6 @@ if not candles.empty and len(candles) >= 2:
         decreasing_line_color='#ff5252',
         name='Price'
     ))
-
     fig.add_trace(go.Bar(
         x=display_df.index,
         y=display_df['volume'],
@@ -117,16 +117,14 @@ if not candles.empty and len(candles) >= 2:
         yaxis=dict(title="Price (USDT)", showgrid=True, gridcolor="#1e1e1e"),
         yaxis2=dict(title="Volume (BTC)", overlaying="y", side="right", showgrid=False),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        font=dict(size=13)
     )
 
     st.plotly_chart(fig, width="stretch", key="live_chart_key")
 
 else:
-    st.info("Waiting for more tick data to build candles...")
+    st.info("Waiting for more tick data... The recorder is running but not enough candles yet.")
 
 st.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')} | Recorder must be running")
 
-# Auto refresh
 time.sleep(3)
 st.rerun()
