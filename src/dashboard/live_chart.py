@@ -13,7 +13,7 @@ st.markdown("""
     <p style='text-align: center; color: #aaaaaa; font-size: 18px; margin-top: 0;'>1 Minute Candles • Real-time Tick Data</p>
 """, unsafe_allow_html=True)
 
-TICK_DIR = "data/ticks/BTC_USDT"
+TICK_DIR = "data/ticks/BTCUSDT"
 
 def get_latest_tick_file():
     files = glob.glob(f"{TICK_DIR}/BTC_USDT_*.parquet")
