@@ -20,10 +20,9 @@ os.makedirs(DATA_DIR, exist_ok=True)
 buffers = {}
 last_save = {}
 file_locks = {}
+last_price = {}
+last_btc_log = time.time()
 stop_event = threading.Event()
-
-last_price = {}        # Keep track of latest price per symbol for logging
-last_log_time = time.time()
 
 # =========================================================
 
@@ -31,15 +30,13 @@ def get_all_spot_symbols():
     try:
         exchange = ccxt.binance()
         markets = exchange.load_markets()
-        symbols = [
-            market['symbol'].lower().replace("/", "") 
-            for market in markets.values() 
-            if market.get('spot') and market.get('active')
-        ]
+        symbols = [market['symbol'].lower().replace("/", "") 
+                  for market in markets.values() 
+                  if market.get('spot') and market.get('active')]
         print(f"✅ Loaded {len(symbols)} active spot trading pairs.")
         return sorted(symbols)
     except Exception as e:
-        print(f"⚠️ Failed to fetch symbols: {e}. Using fallback.")
+        print(f"⚠️ Failed to fetch symbols: {e}")
         return ["btcusdt", "ethusdt", "solusdt"]
 
 def get_today_file(symbol):
@@ -79,8 +76,8 @@ def save_buffer(symbol, force=False):
         except Exception as e:
             print(f"Save error [{symbol}]: {e}")
 
-def on_message(ws, message, batch_symbols):
-    global last_log_time
+def on_message(ws, message):
+    global last_btc_log
     try:
         data = json.loads(message)
         if data.get('e') == 'trade':
@@ -95,18 +92,19 @@ def on_message(ws, message, batch_symbols):
                 buffers[symbol].append(trade)
                 last_price[symbol] = trade['price']
 
-                # Auto save
+                # Save if interval reached
                 if time.time() - last_save.get(symbol, 0) >= SAVE_INTERVAL:
                     save_buffer(symbol)
 
-                # Print BTC price every 10 seconds for monitoring
-                if symbol == "btcusdt" and time.time() - last_log_time >= 10:
-                    print(f"📊 BTC/USDT Live → ${last_price.get('btcusdt', 0):,.2f} | "
-                          f"Time: {datetime.now().strftime('%H:%M:%S')}")
-                    last_log_time = time.time()
+                # Show BTC price every 8 seconds for monitoring
+                if symbol == "btcusdt" and time.time() - last_btc_log >= 8:
+                    print(f"📊 BTC/USDT → ${last_price.get('btcusdt', 0):,.2f} | "
+                          f"{datetime.now().strftime('%H:%M:%S')} | "
+                          f"Active symbols: {len([s for s in buffers if buffers[s]])}")
+                    last_btc_log = time.time()
 
-    except Exception as e:
-        pass  # Silent fail on individual messages
+    except Exception:
+        pass  # Silent on bad messages
 
 def create_websocket_for_batch(batch_id, batch_symbols):
     streams = [f"{s}@trade" for s in batch_symbols]
@@ -118,7 +116,7 @@ def create_websocket_for_batch(batch_id, batch_symbols):
     ws = websocket.WebSocketApp(
         url,
         on_open=on_open,
-        on_message=lambda ws, msg: on_message(ws, msg, batch_symbols),
+        on_message=on_message,
         on_error=lambda ws, err: print(f"Batch {batch_id} error: {err}"),
         on_close=lambda ws, code, msg: print(f"Batch {batch_id} closed")
     )
@@ -141,29 +139,25 @@ def start_recorder():
 
     batches = [all_symbols[i:i + BATCH_SIZE] for i in range(0, len(all_symbols), BATCH_SIZE)]
     
-    print(f"🚀 Starting Full Tick Recorder for {len(all_symbols)} symbols in {len(batches)} batches...")
+    print(f"🚀 Starting recorder for {len(all_symbols)} symbols in {len(batches)} batches...")
 
-    # Start periodic saver
     threading.Thread(target=periodic_saver, daemon=True).start()
 
-    # Start WebSocket batches
     for i, batch in enumerate(batches):
         t = threading.Thread(target=create_websocket_for_batch, args=(i+1, batch), daemon=True)
         t.start()
-        time.sleep(0.4)
+        time.sleep(0.35)
 
-    print("✅ Recorder is now running. You will see BTC price updates every 10 seconds.")
+    print("✅ All batches started. Waiting for first trades...")
 
-    # Keep alive
     try:
         while True:
-            time.sleep(60)
+            time.sleep(30)
     except KeyboardInterrupt:
-        print("\n🛑 Shutting down recorder...")
+        print("\n🛑 Shutting down...")
         stop_event.set()
         for symbol in buffers:
             save_buffer(symbol, force=True)
-        print("Final save completed.")
 
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, lambda s, f: sys.exit(0))
