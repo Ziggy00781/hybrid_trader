@@ -47,7 +47,7 @@ def save_buffer(symbol, force=False):
     if symbol not in buffers or not buffers[symbol]:
         return
 
-    with file_locks.get(symbol, threading.Lock()):
+    with file_locks[symbol]:
         try:
             new_df = pd.DataFrame(buffers[symbol])
             file_path = get_today_file(symbol)
@@ -68,10 +68,10 @@ def save_buffer(symbol, force=False):
                   f"Total: {len(combined):,} | Last: ${last_price[symbol]:,.2f}")
 
             buffers[symbol].clear()
-            last_save[s0] = time.time()
+            last_save[symbol] = time.time()
 
         except Exception as e:
-            print(f"Save error [{symbol}]: {e}")
+            print(f"❌ Save error [{symbol}]: {e}")
 
 def on_message(ws, message):
     try:
@@ -98,8 +98,8 @@ def on_message(ws, message):
                           f"{datetime.now().strftime('%H:%M:%S')}")
                     last_btc_log = time.time()
 
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"❌ Message error: {e}")
 
 def create_websocket_for_batch(batch_id, batch_symbols):
     streams = [f"{s}@trade" for s in batch_symbols]
@@ -109,12 +109,12 @@ def create_websocket_for_batch(batch_id, batch_symbols):
         print(f"✅ Batch {batch_id} connected ({len(batch_symbols)} symbols)")
 
     def on_error(ws, error):
-        print(f"Batch {batch_id} error: {error}")
+        print(f"❌ Batch {batch_id} error: {error}")
         if not stop_event.is_set():
             ws.close()
 
     def on_close(ws, close_status_code, close_msg):
-        print(f"Batch {batch_id} closed")
+        print(f"❌ Batch {batch_id} closed")
         if not stop_event.is_set():
             print(f"🔄 Reconnecting batch {batch_id}...")
             create_websocket_for_batch(batch_id, batch_symbols)
