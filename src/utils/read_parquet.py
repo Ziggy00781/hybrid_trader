@@ -1,10 +1,10 @@
 import sys
-import pandas as pd
 from pathlib import Path
+import pyarrow.parquet as pq
 
 def main():
     if len(sys.argv) != 2:
-        print("Usage: python read_parquet.py <filename.parquet>")
+        print("Usage: python read_parquet_stream.py <filename.parquet>")
         sys.exit(1)
 
     file_path = Path(sys.argv[1])
@@ -13,25 +13,35 @@ def main():
         print(f"Error: File not found -> {file_path}")
         sys.exit(1)
 
-    # Force pandas to show full output
-    pd.set_option("display.max_rows", None)
-    pd.set_option("display.max_columns", None)
-    pd.set_option("display.width", None)
-    pd.set_option("display.max_colwidth", None)
-
     try:
-        df = pd.read_parquet(file_path)
+        parquet_file = pq.ParquetFile(file_path)
     except Exception as e:
-        print(f"Failed to read parquet file: {e}")
+        print(f"Failed to open parquet file: {e}")
         sys.exit(1)
 
     print("\n=== FILE INFO ===")
     print(f"Path: {file_path.resolve()}")
-    print(f"Rows: {len(df)}")
-    print(f"Columns: {list(df.columns)}")
+    print(f"Row groups: {parquet_file.num_row_groups}")
+    print(f"Schema:\n{parquet_file.schema}")
 
-    print("\n=== FULL DATA ===")
-    print(df.to_string(index=True))
+    print("\n=== STREAMING ROWS ===")
+
+    # Iterate row group by row group
+    for rg in range(parquet_file.num_row_groups):
+        batch = parquet_file.read_row_group(rg)
+        table = batch.to_pydict()
+
+        # Convert to row-by-row iteration
+        num_rows = len(next(iter(table.values())))
+        columns = list(table.keys())
+
+        for i in range(num_rows):
+            row = {col: table[col][i] for col in columns}
+            print(row)
+
+        # Explicitly free memory
+        del batch
+        del table
 
 if __name__ == "__main__":
     main()
