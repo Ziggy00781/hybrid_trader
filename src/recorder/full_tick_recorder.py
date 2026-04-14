@@ -9,36 +9,38 @@ import threading
 from datetime import datetime
 import shutil
 import ccxt
-import queue
 
 # ========================= CONFIG =========================
 DATA_DIR = "data/ticks"
-SAVE_INTERVAL = 5          # seconds
-BATCH_SIZE = 180           # Safe number of symbols per WebSocket (Binance limit ~200-250)
+SAVE_INTERVAL = 5
+BATCH_SIZE = 180
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# Global buffers and locks
 buffers = {}
 last_save = {}
 file_locks = {}
-symbol_to_batch = {}
-
 stop_event = threading.Event()
+
+last_price = {}        # Keep track of latest price per symbol for logging
+last_log_time = time.time()
 
 # =========================================================
 
 def get_all_spot_symbols():
-    """Get all active spot trading pairs from Binance"""
-    exchange = ccxt.binance()
-    markets = exchange.load_markets()
-    symbols = [
-        market['symbol'].lower().replace("/", "") 
-        for market in markets.values() 
-        if market['spot'] and market['active']
-    ]
-    print(f"Found {len(symbols)} active spot trading pairs.")
-    return sorted(symbols)
+    try:
+        exchange = ccxt.binance()
+        markets = exchange.load_markets()
+        symbols = [
+            market['symbol'].lower().replace("/", "") 
+            for market in markets.values() 
+            if market.get('spot') and market.get('active')
+        ]
+        print(f"✅ Loaded {len(symbols)} active spot trading pairs.")
+        return sorted(symbols)
+    except Exception as e:
+        print(f"⚠️ Failed to fetch symbols: {e}. Using fallback.")
+        return ["btcusdt", "ethusdt", "solusdt"]
 
 def get_today_file(symbol):
     date_str = datetime.now().strftime("%Y-%m-%d")
@@ -66,8 +68,10 @@ def save_buffer(symbol, force=False):
             combined.to_parquet(temp_path, index=False)
             shutil.move(temp_path, file_path)
 
+            last_price[symbol] = combined['price'].iloc[-1]
+
             print(f"💾 [{symbol.upper()}] Saved {len(buffers[symbol]):,} ticks | "
-                  f"Total: {len(combined):,} | Last: ${combined['price'].iloc[-1]:,.2f}")
+                  f"Total: {len(combined):,} | Last: ${last_price[symbol]:,.2f}")
 
             buffers[symbol].clear()
             last_save[symbol] = time.time()
@@ -76,6 +80,7 @@ def save_buffer(symbol, force=False):
             print(f"Save error [{symbol}]: {e}")
 
 def on_message(ws, message, batch_symbols):
+    global last_log_time
     try:
         data = json.loads(message)
         if data.get('e') == 'trade':
@@ -88,73 +93,73 @@ def on_message(ws, message, batch_symbols):
                     'is_buyer_maker': bool(data['m'])
                 }
                 buffers[symbol].append(trade)
+                last_price[symbol] = trade['price']
 
-                # Save periodically
-                if time.time() - last_save[symbol] >= SAVE_INTERVAL:
+                # Auto save
+                if time.time() - last_save.get(symbol, 0) >= SAVE_INTERVAL:
                     save_buffer(symbol)
+
+                # Print BTC price every 10 seconds for monitoring
+                if symbol == "btcusdt" and time.time() - last_log_time >= 10:
+                    print(f"📊 BTC/USDT Live → ${last_price.get('btcusdt', 0):,.2f} | "
+                          f"Time: {datetime.now().strftime('%H:%M:%S')}")
+                    last_log_time = time.time()
+
     except Exception as e:
-        print(f"Message error: {e}")
+        pass  # Silent fail on individual messages
 
 def create_websocket_for_batch(batch_id, batch_symbols):
     streams = [f"{s}@trade" for s in batch_symbols]
     url = f"wss://stream.binance.com:9443/stream?streams={'/'.join(streams)}"
 
     def on_open(ws):
-        print(f"✅ Batch {batch_id} connected | {len(batch_symbols)} symbols")
-
-    def on_message_wrapper(ws, message):
-        on_message(ws, message, batch_symbols)
+        print(f"✅ Batch {batch_id} connected ({len(batch_symbols)} symbols)")
 
     ws = websocket.WebSocketApp(
         url,
         on_open=on_open,
-        on_message=on_message_wrapper,
+        on_message=lambda ws, msg: on_message(ws, msg, batch_symbols),
         on_error=lambda ws, err: print(f"Batch {batch_id} error: {err}"),
-        on_close=lambda ws, code, msg: print(f"Batch {batch_id} closed. Reconnecting...")
+        on_close=lambda ws, code, msg: print(f"Batch {batch_id} closed")
     )
     ws.run_forever(ping_interval=30, ping_timeout=10)
+
+def periodic_saver():
+    while not stop_event.is_set():
+        time.sleep(SAVE_INTERVAL)
+        for symbol in list(buffers.keys()):
+            save_buffer(symbol)
 
 def start_recorder():
     all_symbols = get_all_spot_symbols()
     
-    # Initialize buffers and locks
     for symbol in all_symbols:
         buffers[symbol] = []
         last_save[symbol] = time.time()
         file_locks[symbol] = threading.Lock()
+        last_price[symbol] = 0.0
 
-    # Split into batches
     batches = [all_symbols[i:i + BATCH_SIZE] for i in range(0, len(all_symbols), BATCH_SIZE)]
     
-    print(f"Starting {len(batches)} WebSocket connections for {len(all_symbols)} symbols...")
+    print(f"🚀 Starting Full Tick Recorder for {len(all_symbols)} symbols in {len(batches)} batches...")
 
-    threads = []
+    # Start periodic saver
+    threading.Thread(target=periodic_saver, daemon=True).start()
+
+    # Start WebSocket batches
     for i, batch in enumerate(batches):
-        t = threading.Thread(
-            target=create_websocket_for_batch,
-            args=(i+1, batch),
-            daemon=True
-        )
+        t = threading.Thread(target=create_websocket_for_batch, args=(i+1, batch), daemon=True)
         t.start()
-        threads.append(t)
-        time.sleep(0.5)  # Avoid overwhelming Binance
+        time.sleep(0.4)
 
-    print("All batches started. Recording all spot ticks...")
+    print("✅ Recorder is now running. You will see BTC price updates every 10 seconds.")
 
-    # Periodic save thread
-    def periodic_save():
-        while not stop_event.is_set():
-            time.sleep(SAVE_INTERVAL)
-            for symbol in list(buffers.keys()):
-                save_buffer(symbol)
-    threading.Thread(target=periodic_save, daemon=True).start()
-
-    # Keep main thread alive
+    # Keep alive
     try:
         while True:
             time.sleep(60)
     except KeyboardInterrupt:
-        print("\nShutting down recorder...")
+        print("\n🛑 Shutting down recorder...")
         stop_event.set()
         for symbol in buffers:
             save_buffer(symbol, force=True)
