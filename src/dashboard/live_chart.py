@@ -25,7 +25,11 @@ def get_latest_tick_file():
 
 @st.cache_data(ttl=3)
 def load_latest_ticks(file_path):
-    return pd.read_parquet(file_path)
+    try:
+        return pd.read_parquet(file_path)
+    except Exception as e:
+        st.error(f"Error reading parquet file: {e}")
+        st.stop()
 
 def ticks_to_candles(ticks_df):
     if ticks_df.empty:
@@ -58,24 +62,29 @@ if not candles.empty and len(candles) >= 2:
     prev_price = display_df['close'].iloc[-2]
     price_change = current_price - prev_price
 
-    # Big Price Display (fixed label warning)
+    # Correct Volume Calculations
+    last_vol_btc = display_df['volume'].iloc[-1]
+    last_vol_usdt = last_vol_btc * current_price
+
+    # Big Price Display
     col_price, col_vol = st.columns([3, 1])
     
     with col_price:
         st.metric(
-            label="Current Price",
+            label="Current BTC Price",
             value=f"${current_price:,.2f}",
-            delta=f"{price_change:+.2f} USD",
+            delta=f"{price_change:+.2f}",
             delta_color="normal"
         )
     
     with col_vol:
         st.metric(
             label="Last Minute Volume",
-            value=f"{display_df['volume'].iloc[-1]:,.0f} USDT"
+            value=f"{last_vol_btc:.6f} BTC",
+            delta=f"${last_vol_usdt:,.0f} USDT"
         )
 
-    # Main Chart - Cleaner & Bigger
+    # Main Chart
     fig = go.Figure()
 
     fig.add_trace(go.Candlestick(
@@ -106,7 +115,7 @@ if not candles.empty and len(candles) >= 2:
         xaxis_rangeslider_visible=False,
         xaxis=dict(showgrid=True, gridcolor="#1e1e1e"),
         yaxis=dict(title="Price (USDT)", showgrid=True, gridcolor="#1e1e1e"),
-        yaxis2=dict(title="Volume", overlaying="y", side="right", showgrid=False),
+        yaxis2=dict(title="Volume (BTC)", overlaying="y", side="right", showgrid=False),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         font=dict(size=13)
     )
