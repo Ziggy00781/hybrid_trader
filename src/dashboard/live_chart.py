@@ -16,7 +16,7 @@ st.markdown("""
 TICK_DIR = "data/ticks/BTCUSDT"
 
 def get_latest_tick_file():
-    files = glob.glob(f"{TICK_DIR}/BTC_USDT_*.parquet")
+    files = glob.glob(f"{TICK_DIR}/BTCUSDT_*.parquet")
     if not files:
         st.error("No tick files found. Start the recorder first.")
         st.stop()
