@@ -1,155 +1,163 @@
-import asyncio
+import websocket
 import json
-import random
-import traceback
-from datetime import datetime, timezone
-from pathlib import Path
-
-import aiohttp
-import websockets
 import pandas as pd
+import os
+import time
+import signal
+import sys
+import threading
+from datetime import datetime
+import shutil
+import ccxt
 
+# ========================= CONFIG =========================
+DATA_DIR = "data/ticks"
+SAVE_INTERVAL = 5          # seconds
+BATCH_SIZE = 120           # Reduced for stability (was 180)
 
-BINANCE_WS = "wss://stream.binance.com:9443/stream"
-ROOT_DIR = Path("data/ticks")
-ROOT_DIR.mkdir(parents=True, exist_ok=True)
+os.makedirs(DATA_DIR, exist_ok=True)
 
-BATCH_SIZE = 40
-FLUSH_INTERVAL = 2          # seconds
-BUFFER_LIMIT = 1000         # flush if buffer reaches this many ticks
+buffers = {}
+last_save = {}
+file_locks = {}
+last_price = {}
+last_btc_log = time.time()
+stop_event = threading.Event()
 
+# =========================================================
 
-# ---------------------------------------------------------
-# SYMBOL DISCOVERY
-# ---------------------------------------------------------
-async def get_usdt_spot_symbols():
-    url = "https://api.binance.com/api/v3/exchangeInfo"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as r:
-            data = await r.json()
+def get_all_spot_symbols():
+    try:
+        exchange = ccxt.binance()
+        markets = exchange.load_markets()
+        symbols = [m['symbol'].lower().replace("/", "") 
+                   for m in markets.values() 
+                   if m.get('spot') and m.get('active')]
+        print(f"✅ Loaded {len(symbols)} active spot trading pairs.")
+        return sorted(symbols)
+    except Exception as e:
+        print(f"⚠️ Failed to fetch symbols: {e}")
+        return ["btcusdt", "ethusdt", "solusdt"]
 
-    symbols = []
-    for s in data["symbols"]:
-        if (
-            s["status"] == "TRADING"
-            and s["isSpotTradingAllowed"]
-            and s["quoteAsset"] == "USDT"
-        ):
-            symbols.append(s["symbol"].lower())
+def get_today_file(symbol):
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    symbol_upper = symbol.upper()
+    dir_path = os.path.join(DATA_DIR, symbol_upper)
+    os.makedirs(dir_path, exist_ok=True)
+    return os.path.join(dir_path, f"{symbol_upper}_{date_str}.parquet")
 
-    return symbols
+def save_buffer(symbol, force=False):
+    if symbol not in buffers or not buffers[symbol]:
+        return
 
-
-# ---------------------------------------------------------
-# DAILY PARQUET WRITER
-# ---------------------------------------------------------
-class DailyParquetWriter:
-    def __init__(self, symbol):
-        self.symbol = symbol
-        self.buffer = []
-        self.current_date = self._today()
-
-        # ensure directory exists
-        self.dir = ROOT_DIR / symbol
-        self.dir.mkdir(parents=True, exist_ok=True)
-
-    def _today(self):
-        return datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-    def _path(self):
-        return self.dir / f"{self.current_date}.parquet"
-
-    def add(self, tick):
-        self.buffer.append(tick)
-
-    def flush(self):
-        if not self.buffer:
-            return
-
-        # rollover at midnight UTC
-        today = self._today()
-        if today != self.current_date:
-            self.current_date = today
-
-        df = pd.DataFrame(self.buffer)
-        df.to_parquet(self._path(), index=False, append=True)
-        self.buffer.clear()
-
-
-# ---------------------------------------------------------
-# WEBSOCKET CONSUMER
-# ---------------------------------------------------------
-async def consume_batch(batch_id, symbols):
-    streams = "/".join([f"{s}@trade" for s in symbols])
-    url = f"{BINANCE_WS}?streams={streams}"
-
-    writers = {s: DailyParquetWriter(s) for s in symbols}
-    last_flush = datetime.now(timezone.utc)
-
-    while True:
+    with file_locks[symbol]:
         try:
-            async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
-                print(f"[Batch {batch_id}] Connected ({len(symbols)} symbols)")
+            new_df = pd.DataFrame(buffers[symbol])
+            file_path = get_today_file(symbol)
+            temp_path = file_path + ".tmp"
 
-                async for msg in ws:
-                    try:
-                        raw = json.loads(msg)
-                        data = raw.get("data", raw)
+            if os.path.exists(file_path):
+                existing = pd.read_parquet(file_path)
+                combined = pd.concat([existing, new_df], ignore_index=True)
+            else:
+                combined = new_df
 
-                        if data.get("e") != "trade":
-                            continue
+            combined.to_parquet(temp_path, index=False)
+            shutil.move(temp_path, file_path)
 
-                        symbol = data["s"].lower()
-                        tick = {
-                            "symbol": symbol,
-                            "price": float(data["p"]),
-                            "qty": float(data["q"]),
-                            "side": "buy" if data["m"] is False else "sell",
-                            "ts_event": data["E"],
-                            "ts_trade": data["T"],
-                        }
+            last_price[symbol] = combined['price'].iloc[-1]
 
-                        w = writers[symbol]
-                        w.add(tick)
+            print(f"💾 [{symbol.upper()}] Saved {len(buffers[symbol]):,} ticks | "
+                  f"Total: {len(combined):,} | Last: ${last_price[symbol]:,.2f}")
 
-                        # periodic flush
-                        now = datetime.now(timezone.utc)
-                        if (
-                            len(w.buffer) >= BUFFER_LIMIT
-                            or (now - last_flush).total_seconds() >= FLUSH_INTERVAL
-                        ):
-                            for writer in writers.values():
-                                writer.flush()
-                            last_flush = now
+            buffers[symbol].clear()
+            last_save[symbol] = time.time()
 
-                    except Exception:
-                        print(f"[Batch {batch_id}] Message error:")
-                        traceback.print_exc()
+        except Exception as e:
+            print(f"Save error [{symbol}]: {e}")
 
-        except Exception:
-            print(f"[Batch {batch_id}] Connection lost, retrying...")
-            traceback.print_exc()
-            await asyncio.sleep(2 + random.random() * 3)
+def on_message(ws, message):
+    global last_btc_log
+    try:
+        data = json.loads(message)
+        if data.get('e') == 'trade':
+            symbol = data['s'].lower()
+            if symbol in buffers:
+                trade = {
+                    'timestamp': pd.to_datetime(data['T'], unit='ms'),
+                    'price': float(data['p']),
+                    'quantity': float(data['q']),
+                    'is_buyer_maker': bool(data['m'])
+                }
+                buffers[symbol].append(trade)
+                last_price[symbol] = trade['price']
 
+                # Auto-save
+                if time.time() - last_save.get(symbol, 0) >= SAVE_INTERVAL:
+                    save_buffer(symbol)
 
-# ---------------------------------------------------------
-# MAIN
-# ---------------------------------------------------------
-async def main():
-    symbols = await get_usdt_spot_symbols()
-    print(f"Discovered {len(symbols)} USDT spot symbols")
+                # BTC live price every 8 seconds
+                if symbol == "btcusdt" and time.time() - last_btc_log >= 8:
+                    print(f"📊 BTC/USDT → ${last_price.get('btcusdt', 0):,.2f} | "
+                          f"{datetime.now().strftime('%H:%M:%S')}")
+                    last_btc_log = time.time()
 
-    batches = [
-        symbols[i:i + BATCH_SIZE]
-        for i in range(0, len(symbols), BATCH_SIZE)
-    ]
+    except Exception:
+        pass
 
-    tasks = []
+def create_websocket_for_batch(batch_id, batch_symbols):
+    streams = [f"{s}@trade" for s in batch_symbols]
+    url = f"wss://stream.binance.com:9443/stream?streams={'/'.join(streams)}"
+
+    def on_open(ws):
+        print(f"✅ Batch {batch_id} connected ({len(batch_symbols)} symbols)")
+
+    ws = websocket.WebSocketApp(
+        url,
+        on_open=on_open,
+        on_message=on_message,
+        on_error=lambda ws, err: print(f"Batch {batch_id} error: {err}"),
+        on_close=lambda ws, code, msg: print(f"Batch {batch_id} closed")
+    )
+    ws.run_forever(ping_interval=30, ping_timeout=10)
+
+def periodic_saver():
+    while not stop_event.is_set():
+        time.sleep(SAVE_INTERVAL)
+        for symbol in list(buffers.keys()):
+            save_buffer(symbol)
+
+def start_recorder():
+    all_symbols = get_all_spot_symbols()
+    
+    for symbol in all_symbols:
+        buffers[symbol] = []
+        last_save[symbol] = time.time()
+        file_locks[symbol] = threading.Lock()
+        last_price[symbol] = 0.0
+
+    batches = [all_symbols[i:i + BATCH_SIZE] for i in range(0, len(all_symbols), BATCH_SIZE)]
+    
+    print(f"🚀 Starting recorder for {len(all_symbols)} symbols in {len(batches)} batches...")
+
+    threading.Thread(target=periodic_saver, daemon=True).start()
+
     for i, batch in enumerate(batches):
-        tasks.append(asyncio.create_task(consume_batch(i, batch)))
+        t = threading.Thread(target=create_websocket_for_batch, args=(i+1, batch), daemon=True)
+        t.start()
+        time.sleep(0.4)
 
-    await asyncio.gather(*tasks)
+    print("✅ All batches started. Waiting for trades... (BTC price should appear soon)")
 
+    try:
+        while True:
+            time.sleep(60)
+    except KeyboardInterrupt:
+        print("\n🛑 Shutting down...")
+        stop_event.set()
+        for symbol in buffers:
+            save_buffer(symbol, force=True)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    signal.signal(signal.SIGINT, lambda s, f: sys.exit(0))
+    start_recorder()
