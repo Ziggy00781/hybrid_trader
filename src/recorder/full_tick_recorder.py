@@ -21,10 +21,7 @@ buffers = {}
 last_save = {}
 file_locks = {}
 last_price = {}
-last_btc_log = time.time()
 stop_event = threading.Event()
-
-# =========================================================
 
 def get_all_spot_symbols():
     try:
@@ -32,7 +29,7 @@ def get_all_spot_symbols():
         markets = exchange.load_markets()
         symbols = [m['symbol'].lower().replace("/", "") 
                    for m in markets.values() 
-                   if m.get('spot') and m.get('active')]
+                   if m.get('type') == 'spot' and m.get('active')]
         print(f"✅ Loaded {len(symbols)} active spot trading pairs.")
         return sorted(symbols)
     except Exception as e:
@@ -50,7 +47,7 @@ def save_buffer(symbol, force=False):
     if symbol not in buffers or not buffers[symbol]:
         return
 
-    with file_locks[symbol]:
+    with file_locks.get(symbol, threading.Lock()):
         try:
             new_df = pd.DataFrame(buffers[symbol])
             file_path = get_today_file(symbol)
@@ -71,13 +68,12 @@ def save_buffer(symbol, force=False):
                   f"Total: {len(combined):,} | Last: ${last_price[symbol]:,.2f}")
 
             buffers[symbol].clear()
-            last_save[symbol] = time.time()
+            last_save[s0] = time.time()
 
         except Exception as e:
             print(f"Save error [{symbol}]: {e}")
 
 def on_message(ws, message):
-    global last_btc_log
     try:
         data = json.loads(message)
         if data.get('e') == 'trade':
@@ -112,12 +108,23 @@ def create_websocket_for_batch(batch_id, batch_symbols):
     def on_open(ws):
         print(f"✅ Batch {batch_id} connected ({len(batch_symbols)} symbols)")
 
+    def on_error(ws, error):
+        print(f"Batch {batch_id} error: {error}")
+        if not stop_event.is_set():
+            ws.close()
+
+    def on_close(ws, close_status_code, close_msg):
+        print(f"Batch {batch_id} closed")
+        if not stop_event.is_set():
+            print(f"🔄 Reconnecting batch {batch_id}...")
+            create_websocket_for_batch(batch_id, batch_symbols)
+
     ws = websocket.WebSocketApp(
         url,
         on_open=on_open,
         on_message=on_message,
-        on_error=lambda ws, err: print(f"Batch {batch_id} error: {err}"),
-        on_close=lambda ws, code, msg: print(f"Batch {batch_id} closed")
+        on_error=on_error,
+        on_close=on_close
     )
     ws.run_forever(ping_interval=30, ping_timeout=10)
 
@@ -129,15 +136,15 @@ def periodic_saver():
 
 def start_recorder():
     all_symbols = get_all_spot_symbols()
-    
+
     for symbol in all_symbols:
         buffers[symbol] = []
         last_save[symbol] = time.time()
         file_locks[symbol] = threading.Lock()
         last_price[symbol] = 0.0
 
-    batches = [all_symbols[i:i + BATCH_SIZE] for i in range(0, len(all_symbols), BATCH_SIZE)]
-    
+    batches = [all_symbols[i:i+BATCH_SIZE] for i in range(0, len(all_symbols), BATCH_SIZE)]
+
     print(f"🚀 Starting recorder for {len(all_symbols)} symbols in {len(batches)} batches...")
 
     threading.Thread(target=periodic_saver, daemon=True).start()
