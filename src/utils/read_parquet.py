@@ -1,70 +1,59 @@
 #!/usr/bin/env python3
 """
-Diagnostic reader for corrupted timestamp Parquet files.
+Clean and nice reader for Binance raw trades Parquet files.
+Shows human-readable timestamps.
 """
 
 import argparse
 import pyarrow.parquet as pq
 import pandas as pd
+from datetime import datetime, timezone
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("file", help="Parquet file to inspect")
-    parser.add_argument("--max-rows", type=int, default=30)
-    parser.add_argument("--show-raw", action="store_true")
+    parser = argparse.ArgumentParser(description="View Binance raw trades Parquet file")
+    parser.add_argument("file", type=str, help="Path to the .parquet file")
+    parser.add_argument("--max-rows", type=int, default=20, help="Number of rows to display (default: 20)")
+    parser.add_argument("--show-raw", action="store_true", help="Also show raw table head")
     args = parser.parse_args()
 
+    path = args.file
     print("=== FILE INFO ===")
-    print(f"Path: {args.file}")
+    print(f"Path: {path}")
 
-    pf = pq.ParquetFile(args.file)
+    pf = pq.ParquetFile(path)
     print(f"Row groups: {pf.num_row_groups}")
     print("Schema:")
     print(pf.schema)
 
+    # Read data
     table = pf.read()
     df = table.to_pandas()
 
     if args.show_raw:
-        print("\n=== RAW FIRST 10 ROWS ===")
-        print(df.head(10))
+        print("\n=== RAW DATA (first 5 rows) ===")
+        print(df.head())
 
-    if "timestamp" not in df.columns:
-        print("ERROR: No timestamp column!")
-        return
+    # === CORRECT CONVERSION (this was the missing piece) ===
+    df["timestamp_ms"] = df["timestamp"].astype("int64")
+    df["timestamp_us"] = df["timestamp_ms"] * 1000                     # for internal use if needed
+    df["timestamp_iso"] = pd.to_datetime(df["timestamp_ms"], unit="ms", utc=True)
 
-    ts = df["timestamp"].astype("int64")
+    # Nice column order
+    cols = ["timestamp_iso", "price", "quantity", "is_buyer_maker"]
+    df = df[cols]
 
-    print("\n=== TIMESTAMP STATISTICS (raw values) ===")
-    print(f"Min timestamp : {ts.min():,}")
-    print(f"Max timestamp : {ts.max():,}")
-    print(f"Mean          : {ts.mean():,.0f}")
-    print(f"Unique values : {ts.nunique():,}")
+    print(f"\n=== FIRST {args.max_rows} TRADES ({datetime.now(timezone.utc).isoformat()}) ===")
 
-    # Try to guess the correct unit
-    print("\n=== POSSIBLE INTERPRETATIONS ===")
-    for unit, factor in [("milliseconds", 1),
-                         ("microseconds", 1000),
-                         ("nanoseconds", 1_000_000)]:
-        ts_corrected = ts // factor
-        min_year = pd.to_datetime(ts_corrected.min(), unit='ms', errors='coerce').year
-        max_year = pd.to_datetime(ts_corrected.max(), unit='ms', errors='coerce').year
-        print(f"{unit:12} → min year ~{min_year} | max year ~{max_year}")
+    for _, row in df.head(args.max_rows).iterrows():
+        print({
+            "timestamp_iso": row["timestamp_iso"].strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + " UTC",
+            "price": f"{row['price']:.2f}",
+            "quantity": f"{row['quantity']:.8f}",
+            "is_buyer_maker": row["is_buyer_maker"]
+        })
 
-    # Best guess reader (tries microseconds first, common for trade data)
-    print("\n=== BEST GUESS OUTPUT (assuming microseconds) ===")
-    df["timestamp_us"] = ts
-    df["timestamp_ms"] = ts // 1000
-    df["timestamp_iso"] = pd.to_datetime(df["timestamp_ms"], unit="ms", utc=True, errors="coerce")
-
-    cols = ["timestamp_us", "timestamp_ms", "timestamp_iso", "price", "quantity", "is_buyer_maker"]
-    df_out = df[cols].head(args.max_rows)
-
-    for _, row in df_out.iterrows():
-        print(row.to_dict())
-
-    print(f"\nTotal rows: {len(df):,}")
+    print(f"\nTotal trades in file: {len(df):,}")
 
 
 if __name__ == "__main__":
