@@ -9,7 +9,7 @@ __pycache__/
 venv/
 .env/
 .venv/
-
+venv_312/
 # Data
 data/
 lightning_logs/
