@@ -1,111 +1,84 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
-read_parquet.py
-
-Enhanced Parquet reader for hybrid_trader:
-- Safely handles timestamp conversions
-- Adds runtime timestamp logging
-- Formats dates for readability
+Simple utility to inspect a trades Parquet file (Binance-style raw trades).
 """
 
 import argparse
-import sys
-from pathlib import Path
+import pyarrow.parquet as pq
+import pyarrow as pa
 from datetime import datetime, timezone
 
-import pyarrow as pa
-import pyarrow.parquet as pq
-
-# Constants for timestamp validation
-MAX_TS_MS = 253402300799000  # Year 9999 in milliseconds
-MIN_TS_MS = 0
-
-def parse_args():
-    parser = argparse.ArgumentParser(description="Safe Parquet reader for hybrid_trader.")
-    parser.add_argument("path", type=str, help="Path to Parquet file")
-    parser.add_argument("--max-rows", type=int, default=None, help="Limit printed rows")
-    parser.add_argument("--batch-size", type=int, default=5000, help="Batch size")
-    parser.add_argument("--show-raw-us", action="store_true", help="Show raw timestamp_us values")
-    return parser.parse_args()
-
-def print_file_info(path, pf):
-    print("\n=== FILE INFO ===")
-    print(f"Path: {path}")
-    print(f"Row groups: {pf.num_row_groups}")
-    print("Schema:")
-    print(pf.schema)
-
-def valid_ms(ts_ms):
-    return ts_ms is not None and MIN_TS_MS < ts_ms < MAX_TS_MS
-
-def ms_to_iso(ts_ms):
-    return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat()
-
-def stream_rows(pf, max_rows, batch_size, show_raw_us):
-    print(f"\n=== STREAMING ROWS ({datetime.now().isoformat()}) ===")
-    
-    printed = 0
-    schema = pf.schema
-    col_names = schema.names
-    has_ts = "timestamp" in col_names
-
-    for batch in pf.iter_batches(batch_size=batch_size):
-        cols = {name: batch.column(name) for name in col_names}
-
-        if has_ts:
-            ts_us_list = cols["timestamp"].cast(pa.int64()).to_pylist()
-        else:
-            ts_us_list = None
-
-        for i in range(batch.num_rows):
-            if has_ts:
-                ts_us = ts_us_list[i]
-                if ts_us is None:
-                    continue
-                ts_ms = ts_us // 1000  # Convert microseconds → milliseconds
-                if not valid_ms(ts_ms):
-                    continue
-            else:
-                ts_us = None
-                ts_ms = None
-
-            row = {}
-            if has_ts:
-                if show_raw_us:
-                    row["timestamp_us"] = ts_us
-                row["timestamp_ms"] = ts_ms
-                row["timestamp_iso"] = ms_to_iso(ts_ms)
-            
-            for name, col in cols.items():
-                if name == "timestamp":
-                    continue
-                row[name] = col[i].as_py()
-
-            print(row)
-            printed += 1
-
-            if max_rows is not None and printed >= max_rows:
-                print(f"\n[info] Reached max_rows={max_rows}")
-                return
-
-    if printed == 0:
-        print("[info] No valid rows found.")
 
 def main():
-    args = parse_args()
-    path = Path(args.path)
+    parser = argparse.ArgumentParser(description="Inspect a raw trades Parquet file")
+    parser.add_argument("file", type=str, help="Path to the .parquet file")
+    parser.add_argument("--max-rows", type=int, default=20, help="Maximum number of rows to show (default: 20)")
+    parser.add_argument("--show-raw", action="store_true", help="Also show the raw pyarrow table before conversion")
+    args = parser.parse_args()
 
-    if not path.exists():
-        print(f"[error] File not found: {path}", file=sys.stderr)
-        sys.exit(1)
+    path = args.file
+    print("=== FILE INFO ===")
+    print(f"Path: {path}")
 
-    try:
-        pf = pq.ParquetFile(path)
-        print_file_info(path, pf)
-        stream_rows(pf, args.max_rows, args.batch_size, args.show_raw_us)
-    except Exception as e:
-        print(f"[error] Failed to process file: {str(e)}", file=sys.stderr)
-        sys.exit(1)
+    # Read metadata
+    parquet_file = pq.ParquetFile(path)
+    print(f"Row groups: {parquet_file.num_row_groups}")
+    print("Schema:")
+    print(parquet_file.schema)
+
+    if args.show_raw:
+        table = parquet_file.read()
+        print("\n=== RAW TABLE (first 5 rows) ===")
+        print(table.to_pandas().head())
+
+    # Read the data
+    table = parquet_file.read()
+
+    # Convert to pandas for easy manipulation
+    df = table.to_pandas()
+
+    # === KEY FIXES START HERE ===
+    # The original column is 'timestamp' stored as milliseconds (int64)
+    if "timestamp" in df.columns:
+        # Convert ms -> us (multiply by 1000)
+        df["timestamp_us"] = df["timestamp"] * 1000
+
+        # Also keep the original ms version for clarity
+        df["timestamp_ms"] = df["timestamp"]
+
+        # Create proper ISO datetime (timezone-aware)
+        df["timestamp_iso"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+    else:
+        print("Warning: No 'timestamp' column found in the schema!")
+        # Fallback: try to find any timestamp-like column
+        for col in df.columns:
+            if "time" in col.lower() or "ts" in col.lower():
+                print(f"Found possible timestamp column: {col}")
+
+    # Ensure other columns exist
+    for col in ["price", "quantity", "is_buyer_maker"]:
+        if col not in df.columns:
+            print(f"Warning: Column '{col}' not found!")
+
+    # Reorder columns nicely
+    cols = ["timestamp_us", "timestamp_ms", "timestamp_iso", "price", "quantity", "is_buyer_maker"]
+    existing_cols = [c for c in cols if c in df.columns]
+    df = df[existing_cols]
+
+    print(f"\n=== STREAMING ROWS ({datetime.now(timezone.utc).isoformat()}) ===")
+
+    for i, row in enumerate(df.itertuples(index=False)):
+        if i >= args.max_rows:
+            print(f"[info] Reached max_rows={args.max_rows}")
+            break
+
+        row_dict = row._asdict()
+        print(row_dict)
+
+    print(f"\nTotal rows in file: {len(df):,}")
+
 
 if __name__ == "__main__":
+    # pandas is used only for to_datetime and itertuples – it's already in your env
+    import pandas as pd
     main()
