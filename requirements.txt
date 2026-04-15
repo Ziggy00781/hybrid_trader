@@ -2,23 +2,22 @@
 # Core Data & Computation (High-Volume Tick Data)
 # ======================
 pandas>=3.0.0
-numpy>=2.1.0
-pyarrow>=15.0.0          # Required for Pandas 3.x + excellent for large Parquet tick files
-polars>=1.0.0            # Blazing-fast alternative to pandas for massive tick datasets
-numba>=0.60.0            # JIT compilation for custom tick-level feature engineering
-
-# Parquet & I/O
-pyarrow>=15.0.0
+numpy>=2.1.0,<2.5.0          # Stable range for pandas 3 + numba compatibility
+pyarrow>=19.0.0              # Excellent performance with Pandas 3.x and large Parquet tick files
+polars>=1.0.0                # Blazing-fast alternative to pandas for massive tick datasets
+numba>=0.60.0                # JIT compilation for custom tick-level feature engineering
 
 # Progress & Utilities
 tqdm>=4.66.0
 requests>=2.32.0
-joblib>=1.4.0            # Parallel processing when merging/processing years of ticks
+joblib>=1.4.0                # Parallel processing when merging/processing years of ticks
+python-dotenv>=1.0.0         # Load .env files for API keys
+tzdata>=2025.1               # Reliable timezone handling for market hours
 
 # ======================
 # Technical Analysis & ML
 # ======================
-ta>=0.11.0               # Technical indicators
+ta>=0.11.0                   # Technical indicators (note: this is the pure-python ta, not TA-Lib)
 lightgbm>=4.0.0
 
 # ======================
@@ -30,7 +29,7 @@ plotly>=5.24.0
 # ======================
 # Exchange & Trading
 # ======================
-ccxt>=4.3.0              # Used for top-10 symbol detection
+ccxt>=4.3.0                  # Used for top-10 symbol detection
 python-binance>=1.0.0
 alpaca-py>=0.43.0
 
@@ -41,6 +40,7 @@ fastapi>=0.115.0
 uvicorn>=0.30.0
 websockets>=13.0
 websocket-client>=1.8.0
+orjson>=3.10.0               # Ultra-fast JSON parsing/serialization (great for WebSocket data)
 
 # ======================
 # AI / Forecasting / Time-Series
@@ -48,7 +48,7 @@ websocket-client>=1.8.0
 transformers>=4.45.0
 accelerate>=0.35.0
 einops>=0.8.0
-chronos-forecasting>=2.2.0     # Latest Chronos-2 / Bolt models (great for tick-derived series)
+chronos-forecasting>=2.2.0   # Latest Chronos-2 / Bolt models (great for tick-derived series)
 
 # Optional: Extra ML ecosystem (uncomment if you expand)
 # torch>=2.4.0
