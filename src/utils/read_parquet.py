@@ -2,14 +2,16 @@
 """
 read_parquet.py
 
-Operator-grade Parquet inspector/streamer with:
+Parquet inspector/streamer for hybrid_trader with:
 - File info (path, row groups, schema)
 - Streaming iteration over batches
-- Robust handling of corrupted timestamps (overflow-safe)
-- Optional row limit for quick peeks
+- Correct handling of mis-declared timestamps:
+  * Physical data is int64 microseconds since epoch
+  * Logical schema says timestamp(ms)
+  * We treat it as microseconds and downscale safely
 
 Usage:
-    python -m src.utils.read_parquet <file.parquet> [--max-rows 100]
+    python -m src.utils.read_parquet BTCUSDT_2025-04-15.parquet --max-rows 20
 """
 
 import argparse
@@ -21,10 +23,11 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 
-# Timestamp is stored as ms since epoch; Python datetime supports up to year 9999.
-# 9999-12-31T23:59:59.999 UTC in ms since epoch:
-MAX_TS_MS = 253402300799000  # conservative upper bound
-MIN_TS_MS = 0  # reject negative / zero timestamps
+# We will interpret the stored int64 as microseconds since epoch.
+# After dividing by 1000, we get milliseconds.
+# Python datetime supports up to year 9999.
+MAX_TS_MS = 253402300799000  # 9999-12-31T23:59:59.999Z in ms
+MIN_TS_MS = 0                # reject negative / zero timestamps
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,9 +50,9 @@ def parse_args() -> argparse.Namespace:
         help="Batch size for streaming iteration.",
     )
     parser.add_argument(
-        "--show-raw-ts",
+        "--show-raw-us",
         action="store_true",
-        help="Show raw timestamp_ms instead of ISO string.",
+        help="Include raw timestamp_us in output.",
     )
     return parser.parse_args()
 
@@ -80,50 +83,59 @@ def stream_rows(
     pf: pq.ParquetFile,
     max_rows: int | None,
     batch_size: int,
-    show_raw_ts: bool,
+    show_raw_us: bool,
 ) -> None:
     print("\n=== STREAMING ROWS ===")
 
     schema = pf.schema
     col_names = schema.names
-
     has_timestamp = "timestamp" in col_names
+
     printed = 0
 
     for batch in pf.iter_batches(batch_size=batch_size):
         columns = {name: batch.column(name) for name in col_names}
 
-        # Prepare timestamp values as raw int64 ms (or None) if present
+        # Prepare timestamp values as raw int64 microseconds (or None) if present
         if has_timestamp:
             ts_col = columns["timestamp"]
 
-            # Cast timestamp(ms) -> int64 ms inside Arrow (no Python datetime)
-            ts_ms_list = ts_col.cast(pa.int64()).to_pylist()
+            # IMPORTANT:
+            # The file claims timestamp(ms), but actual values are microseconds.
+            # So we:
+            #   1) cast to int64 (raw stored value)
+            #   2) interpret as microseconds
+            ts_us_list = ts_col.cast(pa.int64()).to_pylist()
         else:
-            ts_ms_list = None  # type: ignore[assignment]
+            ts_us_list = None  # type: ignore[assignment]
 
         num_rows = batch.num_rows
 
         for i in range(num_rows):
-            # Validate timestamp if present
             if has_timestamp:
-                ts_ms = ts_ms_list[i]
+                ts_us = ts_us_list[i]
+                if ts_us is None:
+                    continue
+
+                # Convert microseconds → milliseconds
+                ts_ms = ts_us // 1000
+
                 if not is_valid_timestamp_ms(ts_ms):
-                    # Skip corrupted timestamp rows
+                    # Skip obviously corrupted timestamps
                     continue
             else:
+                ts_us = None
                 ts_ms = None
 
             row_dict: dict[str, object] = {}
 
             for name, col in columns.items():
                 if name == "timestamp" and has_timestamp:
-                    # Use validated int ms and optionally convert to ISO
-                    ts_val_ms = int(ts_ms)  # type: ignore[arg-type]
-                    if show_raw_ts:
-                        row_dict["timestamp_ms"] = ts_val_ms
-                    else:
-                        row_dict["timestamp_iso"] = ms_to_iso_utc(ts_val_ms)
+                    if show_raw_us and ts_us is not None:
+                        row_dict["timestamp_us"] = int(ts_us)
+                    if ts_ms is not None:
+                        row_dict["timestamp_ms"] = int(ts_ms)
+                        row_dict["timestamp_iso"] = ms_to_iso_utc(int(ts_ms))
                 else:
                     scalar = col[i]
                     row_dict[name] = scalar.as_py()
@@ -158,7 +170,7 @@ def main() -> None:
         pf,
         max_rows=args.max_rows,
         batch_size=args.batch_size,
-        show_raw_ts=args.show_raw_ts,
+        show_raw_us=args.show_raw_us,
     )
 
 
