@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fix bad timestamp Parquet files caused by the old downloader.
+Fix bad timestamp Parquet files (final robust version).
 """
 
 import argparse
@@ -17,6 +17,7 @@ def fix_parquet_file(input_path: str, output_path: str = None, dry_run: bool = F
 
     print(f"Processing: {input_path}")
 
+    # Read original
     table = pq.read_table(input_path)
     df = table.to_pandas()
 
@@ -26,48 +27,48 @@ def fix_parquet_file(input_path: str, output_path: str = None, dry_run: bool = F
 
     ts_raw = df["timestamp"].astype("int64")
 
-    # Detect and correct overscaled timestamps (the main bug)
-    if ts_raw.max() > 4_000_000_000_000:   # clearly too big (year >> 2096)
+    # Fix the scaling (your case: divided by 1_000_000)
+    if ts_raw.max() > 4_000_000_000_000:
         print(f"  Detected overscaled timestamps (max={ts_raw.max():,}) → dividing by 1_000_000")
         ts_correct_ms = (ts_raw // 1_000_000).astype("int64")
     else:
-        print("  Timestamps look reasonable - no scaling applied")
+        print("  Timestamps look reasonable")
         ts_correct_ms = ts_raw
 
-    # Rebuild clean table with only the columns we need
-    clean_df = df[["price", "quantity", "is_buyer_maker"]].copy()
-    clean_df["timestamp"] = ts_correct_ms
+    # Rebuild DataFrame with correct column order
+    clean_df = pd.DataFrame({
+        "timestamp": ts_correct_ms,
+        "price": df["price"].astype("float32"),
+        "quantity": df["quantity"].astype("float32"),
+        "is_buyer_maker": df["is_buyer_maker"].astype("bool")
+    })
 
-    # Convert to Arrow Table with explicit millisecond timestamp type
+    # Create Arrow Table + explicit schema
     clean_table = pa.Table.from_pandas(clean_df)
 
-    # Cast the timestamp column to proper logical type (this is the reliable way)
-    timestamp_field = pa.field("timestamp", pa.timestamp("ms"))
     schema = pa.schema([
-        timestamp_field,
-        pa.field("price", pa.float32()),
-        pa.field("quantity", pa.float32()),
-        pa.field("is_buyer_maker", pa.bool_())
+        ("timestamp", pa.timestamp("ms")),
+        ("price", pa.float32()),
+        ("quantity", pa.float32()),
+        ("is_buyer_maker", pa.bool_())
     ])
+
     clean_table = clean_table.cast(schema)
 
     if dry_run:
         print("  [DRY RUN] Would write corrected file")
+        # Show a sample of corrected timestamps
+        print(f"  Sample corrected timestamp_ms: {ts_correct_ms.iloc[0]:,}")
         return True
 
-    # Backup original (only once)
+    # Backup original
     backup_path = f"{input_path}.bak"
     if not os.path.exists(backup_path):
         os.rename(input_path, backup_path)
         print(f"  Backed up original → {backup_path}")
 
-    # Write without passing 'schema=' to avoid the conflict
-    pq.write_table(
-        clean_table,
-        output_path,
-        compression="snappy",
-        version="2.6"
-    )
+    # Write clean file
+    pq.write_table(clean_table, output_path, compression="snappy")
 
     size_mb = os.path.getsize(output_path) / (1024 * 1024)
     print(f"  Fixed successfully ({size_mb:.1f} MB)")
@@ -76,13 +77,12 @@ def fix_parquet_file(input_path: str, output_path: str = None, dry_run: bool = F
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("path", help="Parquet file or directory to fix")
-    parser.add_argument("--dry-run", action="store_true", help="Show what would be done without writing")
-    parser.add_argument("--max-files", type=int, default=None, help="Process only first N files")
+    parser.add_argument("path", help="Parquet file or directory")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--max-files", type=int, default=None)
     args = parser.parse_args()
 
     path = Path(args.path)
-
     if path.is_file() and path.suffix == ".parquet":
         files = [path]
     else:
@@ -91,7 +91,7 @@ def main():
     if args.max_files:
         files = files[:args.max_files]
 
-    print(f"Found {len(files)} .parquet files to process...\n")
+    print(f"Found {len(files)} parquet files...\n")
 
     fixed = 0
     for i, f in enumerate(files, 1):
@@ -102,7 +102,7 @@ def main():
         except Exception as e:
             print(f"  Error: {e}")
 
-    print(f"\nFinished! Successfully fixed {fixed} files.")
+    print(f"\nDone! Fixed {fixed} files.")
 
 
 if __name__ == "__main__":
