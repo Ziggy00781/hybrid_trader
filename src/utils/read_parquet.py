@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Clean and nice reader for Binance raw trades Parquet files.
-Shows human-readable timestamps.
+Clean, readable viewer for Binance raw trades Parquet files.
 """
 
 import argparse
@@ -13,20 +12,18 @@ from datetime import datetime, timezone
 def main():
     parser = argparse.ArgumentParser(description="View Binance raw trades Parquet file")
     parser.add_argument("file", type=str, help="Path to the .parquet file")
-    parser.add_argument("--max-rows", type=int, default=20, help="Number of rows to display (default: 20)")
-    parser.add_argument("--show-raw", action="store_true", help="Also show raw table head")
+    parser.add_argument("--max-rows", type=int, default=20, help="Number of rows to show")
+    parser.add_argument("--show-raw", action="store_true", help="Show raw pandas head")
     args = parser.parse_args()
 
-    path = args.file
     print("=== FILE INFO ===")
-    print(f"Path: {path}")
+    print(f"Path: {args.file}")
 
-    pf = pq.ParquetFile(path)
+    pf = pq.ParquetFile(args.file)
     print(f"Row groups: {pf.num_row_groups}")
     print("Schema:")
     print(pf.schema)
 
-    # Read data
     table = pf.read()
     df = table.to_pandas()
 
@@ -34,26 +31,24 @@ def main():
         print("\n=== RAW DATA (first 5 rows) ===")
         print(df.head())
 
-    # === CORRECT CONVERSION (this was the missing piece) ===
+    # === CORRECT CONVERSION ===
     df["timestamp_ms"] = df["timestamp"].astype("int64")
-    df["timestamp_us"] = df["timestamp_ms"] * 1000                     # for internal use if needed
     df["timestamp_iso"] = pd.to_datetime(df["timestamp_ms"], unit="ms", utc=True)
 
-    # Nice column order
-    cols = ["timestamp_iso", "price", "quantity", "is_buyer_maker"]
-    df = df[cols]
+    # Format for nice display
+    df_display = pd.DataFrame({
+        "timestamp": df["timestamp_iso"].dt.strftime("%Y-%m-%d %H:%M:%S.%f").str[:-3] + " UTC",
+        "price": df["price"].round(2),
+        "quantity": df["quantity"].round(8),
+        "is_buyer_maker": df["is_buyer_maker"]
+    })
 
     print(f"\n=== FIRST {args.max_rows} TRADES ({datetime.now(timezone.utc).isoformat()}) ===")
 
-    for _, row in df.head(args.max_rows).iterrows():
-        print({
-            "timestamp_iso": row["timestamp_iso"].strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + " UTC",
-            "price": f"{row['price']:.2f}",
-            "quantity": f"{row['quantity']:.8f}",
-            "is_buyer_maker": row["is_buyer_maker"]
-        })
+    for _, row in df_display.head(args.max_rows).iterrows():
+        print(row.to_dict())
 
-    print(f"\nTotal trades in file: {len(df):,}")
+    print(f"\nTotal trades: {len(df):,}")
 
 
 if __name__ == "__main__":
