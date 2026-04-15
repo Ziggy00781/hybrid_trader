@@ -17,7 +17,6 @@ import sys
 from pathlib import Path
 from datetime import datetime, timezone
 
-import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -47,6 +46,11 @@ def parse_args() -> argparse.Namespace:
         default=10_000,
         help="Batch size for streaming iteration.",
     )
+    parser.add_argument(
+        "--show-raw-ts",
+        action="store_true",
+        help="Show raw timestamp_ms instead of ISO string.",
+    )
     return parser.parse_args()
 
 
@@ -58,21 +62,10 @@ def print_file_info(path: Path, pf: pq.ParquetFile) -> None:
     print(pf.schema)
 
 
-def ts_array_to_int_ms(col: pa.ChunkedArray) -> np.ndarray:
-    """
-    Convert a timestamp(ms) column to int64 milliseconds without going through Python datetime.
-
-    Returns:
-        np.ndarray[int64] of ms since epoch; NaT becomes np.iinfo(np.int64).min
-    """
-    # to_numpy() gives datetime64[ms]; view as int64 to get raw ms
-    dt64 = col.to_numpy(zero_copy_only=False)
-    int_ms = dt64.view("int64")
-    return int_ms
-
-
-def is_valid_timestamp_ms(ts_ms: int) -> bool:
-    return (ts_ms is not None) and (MIN_TS_MS < ts_ms < MAX_TS_MS)
+def is_valid_timestamp_ms(ts_ms: int | None) -> bool:
+    if ts_ms is None:
+        return False
+    return MIN_TS_MS < ts_ms < MAX_TS_MS
 
 
 def ms_to_iso_utc(ts_ms: int) -> str:
@@ -83,49 +76,55 @@ def ms_to_iso_utc(ts_ms: int) -> str:
     return dt.isoformat()
 
 
-def stream_rows(pf: pq.ParquetFile, max_rows: int | None, batch_size: int) -> None:
+def stream_rows(
+    pf: pq.ParquetFile,
+    max_rows: int | None,
+    batch_size: int,
+    show_raw_ts: bool,
+) -> None:
     print("\n=== STREAMING ROWS ===")
 
     schema = pf.schema
     col_names = schema.names
 
     has_timestamp = "timestamp" in col_names
-
     printed = 0
 
     for batch in pf.iter_batches(batch_size=batch_size):
-        # Work with Arrow arrays directly; avoid batch.to_pydict() to prevent
-        # automatic conversion of timestamps to Python datetime.
         columns = {name: batch.column(name) for name in col_names}
 
-        # Precompute timestamp mask if present
+        # Prepare timestamp values as raw int64 ms (or None) if present
         if has_timestamp:
             ts_col = columns["timestamp"]
-            ts_ms = ts_array_to_int_ms(ts_col)
 
-            # Mask of valid timestamps
-            valid_mask = (ts_ms > MIN_TS_MS) & (ts_ms < MAX_TS_MS)
+            # Cast timestamp(ms) -> int64 ms inside Arrow (no Python datetime)
+            ts_ms_list = ts_col.cast(pa.int64()).to_pylist()
         else:
-            # If no timestamp column, treat all rows as valid
-            valid_mask = np.ones(batch.num_rows, dtype=bool)
-            ts_ms = None  # type: ignore[assignment]
+            ts_ms_list = None  # type: ignore[assignment]
 
-        # Iterate row-wise within the batch
-        for i in range(batch.num_rows):
-            if not valid_mask[i]:
-                # Skip corrupted timestamp rows
-                continue
+        num_rows = batch.num_rows
+
+        for i in range(num_rows):
+            # Validate timestamp if present
+            if has_timestamp:
+                ts_ms = ts_ms_list[i]
+                if not is_valid_timestamp_ms(ts_ms):
+                    # Skip corrupted timestamp rows
+                    continue
+            else:
+                ts_ms = None
 
             row_dict: dict[str, object] = {}
 
             for name, col in columns.items():
                 if name == "timestamp" and has_timestamp:
-                    # Use validated int ms and convert to ISO string
-                    ts_val_ms = int(ts_ms[i])
-                    row_dict["timestamp_ms"] = ts_val_ms
-                    row_dict["timestamp_iso"] = ms_to_iso_utc(ts_val_ms)
+                    # Use validated int ms and optionally convert to ISO
+                    ts_val_ms = int(ts_ms)  # type: ignore[arg-type]
+                    if show_raw_ts:
+                        row_dict["timestamp_ms"] = ts_val_ms
+                    else:
+                        row_dict["timestamp_iso"] = ms_to_iso_utc(ts_val_ms)
                 else:
-                    # Safe conversion for non-timestamp columns
                     scalar = col[i]
                     row_dict[name] = scalar.as_py()
 
@@ -155,7 +154,12 @@ def main() -> None:
         sys.exit(1)
 
     print_file_info(path, pf)
-    stream_rows(pf, max_rows=args.max_rows, batch_size=args.batch_size)
+    stream_rows(
+        pf,
+        max_rows=args.max_rows,
+        batch_size=args.batch_size,
+        show_raw_ts=args.show_raw_ts,
+    )
 
 
 if __name__ == "__main__":
